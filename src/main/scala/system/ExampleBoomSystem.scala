@@ -20,9 +20,9 @@ class ExampleBoomSystem(implicit p: Parameters) extends BoomSubsystem
   override lazy val module = new ExampleBoomSystemModule(this)
 
   // Error device used for testing and to NACK invalid front port transactions
-  val error = LazyModule(new TLError(p(ErrorDeviceKey), sbus.beatBytes))
+//  val error = LazyModule(new TLError(p(ErrorDeviceKey), sbus.beatBytes))
   // always buffer the error device because no one cares about its latency
-  sbus.coupleTo("slave_named_error"){ error.node := TLBuffer() := _ }
+//  sbus.coupleTo("slave_named_error"){ error.node := TLBuffer() := _ }
 }
 
 class ExampleBoomSystemModule[+L <: ExampleBoomSystem](_outer: L) extends BoomSubsystemModule(_outer)

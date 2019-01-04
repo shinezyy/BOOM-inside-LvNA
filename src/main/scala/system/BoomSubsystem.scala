@@ -14,6 +14,7 @@ import freechips.rocketchip.interrupts._
 import freechips.rocketchip.util._
 import freechips.rocketchip.subsystem._
 import freechips.rocketchip.amba.axi4._
+import lvna.TokenBucketNode
 
 
 case object BoomTilesKey extends Field[Seq[boom.common.BoomTileParams]](Nil)
@@ -31,11 +32,18 @@ trait HasBoomTiles extends HasTiles
   // according to the specified type of clock crossing.
   // Note that we also inject new nodes into the tile itself,
   // also based on the crossing type.
-  val boomTiles = boomTileParams.zip(crossings).map { case (tp, crossing) =>
+  val tokenBuckets = Seq.fill(p(NBoomTiles)){ LazyModule(new TokenBucketNode()) }
+  println(boomTileParams)
+  println(crossings)
+  println(p(NBoomTiles))
+  println(tokenBuckets)
+  println(boomTileParams.zip(crossings).zip(tokenBuckets))
+  val boomTiles = boomTileParams.zip(crossings).zip(tokenBuckets).map { case ((tp, crossing), tokenBucket) =>
     val boomCore = LazyModule(new boom.common.BoomTile(tp, crossing.crossingType)(augmentedTileParameters(tp)))
       .suggestName(tp.name)
 
-    connectMasterPortsToSBus(boomCore, crossing)
+    println("####Connecting interupts for boom core")
+    connectMasterPortsToSBus(boomCore, crossing, tokenBucket)
     connectSlavePortsToCBus(boomCore, crossing)
     connectInterrupts(boomCore, Some(debug), clintOpt, plicOpt)
 

@@ -76,6 +76,7 @@ case class BoomCoreParams(
    val retireWidth: Int = decodeWidth
    val useCompressed: Boolean = false
 	require (useCompressed == false)
+   val useSCIE: Boolean = false
    val haveFSDirty = false
    val pmpGranularity: Int = 4
    val instBits: Int = if (useCompressed) 16 else 32

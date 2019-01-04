@@ -215,6 +215,7 @@ class BoomCore(implicit p: Parameters, edge: freechips.rocketchip.tilelink.TLEdg
    val csr = Module(new freechips.rocketchip.rocket.CSRFile(perfEvents))
    csr.io.inst foreach { c => c := DontCare }
    csr.io.rocc_interrupt := DontCare
+   csr.io.ungated_clock := clock
 
    // evaluate performance counters
    val icache_blocked = !(io.ifu.fetchpacket.valid || RegNext(io.ifu.fetchpacket.valid))
@@ -1472,6 +1473,7 @@ class BoomCore(implicit p: Parameters, edge: freechips.rocketchip.tilelink.TLEdg
    //-------------------------------------------------------------
 
    // We do not support RoCC.
+   io.rocc.mem.perf.blocked := true.B
    io.rocc.cmd.valid := false.B
    io.rocc.cmd.bits <> DontCare
    io.rocc.resp.ready := false.B

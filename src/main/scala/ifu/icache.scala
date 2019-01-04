@@ -128,6 +128,8 @@ class ICacheModule(outer: ICache) extends ICacheBaseModule(outer)
   // How many banks does the ICache use?
   val nBanks = if (cacheParams.fetchBytes <= 8) 1 else 2
   // Each of these cases require some special-case handling.
+  println(s"tl_out.d.bits.data.getWidth (${tl_out.d.bits.data.getWidth}) == wordBits ($wordBits)")
+  println(s"(2*tl_out.d.bits.data.getWidth (${tl_out.d.bits.data.getWidth}) == wordBits ($wordBits)&& nBanks ($nBanks)== 2)")
   require (tl_out.d.bits.data.getWidth == wordBits || (2*tl_out.d.bits.data.getWidth == wordBits && nBanks == 2))
   // If TL refill is half the wordBits size and we have two banks, then the
   // refill writes to only one bank per cycle (instead of across two banks every
