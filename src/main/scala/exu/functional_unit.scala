@@ -442,6 +442,11 @@ class ALUUnit(is_branch_unit: Boolean = false, num_stages: Int = 1)(implicit p: 
 
 
       br_unit.take_pc := mispredict
+      if (DEBUG_BRANCH) {
+         when (mispredict) {
+            printf(p"Inst [${uop.debug_events.fetch_seq}]MisPred: use pc+4 [${pc_sel === PC_PLUS4}], pc+4 [0x${Hexadecimal(pc_plus4)}], pj_addr [0x${Hexadecimal(bj_addr)}]")
+         }
+      }
       val target = Mux(pc_sel === PC_PLUS4, pc_plus4, bj_addr)
       br_unit.target := target
 
@@ -518,6 +523,13 @@ class ALUUnit(is_branch_unit: Boolean = false, num_stages: Int = 1)(implicit p: 
       }
 
       val target_base = Mux(uop.uopc === uopJALR, io.req.bits.rs1_data.asSInt, uop_pc_.asSInt)
+
+      if (DEBUG_BRANCH) {
+         when(uop.uopc === uopJALR) {
+            printf(p"jumping register value is 0x${Hexadecimal(io.req.bits.rs1_data)}\n")
+         }
+      }
+
       val target_offset = imm_xprlen(20,0).asSInt
       val targetXlen = Wire(UInt(xLen.W))
       targetXlen  := (target_base + target_offset).asUInt

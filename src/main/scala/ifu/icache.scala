@@ -179,6 +179,24 @@ class ICacheModule(outer: ICache) extends ICacheBaseModule(outer)
 
   val (_, _, d_done, refill_cnt) = edge_out.count(tl_out.d)
   val refill_done = refill_one_beat && d_done
+  if (DEBUG_ICACHE) {
+    //                    s0_val, s0_addr, s0_miss....
+    printf(p"I-Cache pipe: s0_valid: $s0_valid, s0_addr: $s0_vaddr\n")
+    printf(p"I-Cache pipe: s1_valid: $s1_valid, s1_hit: $s1_hit, s1_vaddr: 0x${Hexadecimal(io.s1_vaddr)}, s1_paddr: 0x${Hexadecimal(io.s1_paddr)}\n")
+    printf(p"I-Cache pipe: s2_valid: $s2_valid, s2_miss: $s2_miss, s2_vaddr: 0x${Hexadecimal(io.s2_vaddr)}, refill valid: $refill_valid\n")
+    when (s2_miss && !refill_fire) {
+      printf(p"tl_out.a.fire() = ${tl_out.a.fire()}, send_hint = $send_hint, tl_out.a.valid = ${tl_out.a.valid}, tl_out.a.ready = ${tl_out.a.ready}\n")
+    }
+    when(s0_valid) {
+      printf(p"s0_vaddr = 0x${Hexadecimal(s0_vaddr)}\n")
+    }
+    when(refill_fire) {
+      printf(p"I-Cache Refill fire: refill_paddr = 0x${Hexadecimal(refill_paddr)}, refill_vaddr = 0x${Hexadecimal(refill_vaddr)}\n")
+    }
+    when(refill_done) {
+      printf(p"I-Cache Refill done: refill_paddr = 0x${Hexadecimal(refill_paddr)}, refill_vaddr = 0x${Hexadecimal(refill_vaddr)}\n")
+    }
+  }
   tl_out.d.ready := !s3_slaveValid
   require (edge_out.manager.minLatency > 0)
 
@@ -270,6 +288,10 @@ class ICacheModule(outer: ICache) extends ICacheBaseModule(outer)
       when (wen) {
         val data = Mux(s3_slaveValid, s1s3_slaveData, tl_out.d.bits.data)
         dataArray.write(mem_idx, dECC.encode(data))
+        if (DEBUG_ICACHE) {
+//          printf(p"Data from TL: 0x${Hexadecimal(tl_out.d.bits.data)}\n")
+          printf(p"Filling to Data Array: ${Binary(data)}\n")
+        }
       }
       s1_dout(i) := dataArray.read(mem_idx, !wen && s0_ren)
     }

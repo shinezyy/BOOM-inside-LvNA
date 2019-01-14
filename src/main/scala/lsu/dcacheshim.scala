@@ -226,20 +226,16 @@ class DCacheShim(implicit p: Parameters) extends BoomModule()(p)
    val enq_idx = Wire(UInt(log2Ceil(max_num_inflight).W))
    enq_idx := 0.U
 
-   for (i <- max_num_inflight-1 to 0 by -1)
-   {
-      when (!inflight_load_buffer(i).valid)
-      {
+   for (i <- max_num_inflight - 1 to 0 by -1) {
+      when(!inflight_load_buffer(i).valid) {
          enq_idx := i.U
       }
    }
 
    // ready logic (is there a inflight buffer slot that's not valid yet?)
    enq_rdy := false.B
-   for (i <- 0 until max_num_inflight)
-   {
-      when (!inflight_load_buffer(i).valid && io.dmem.req.ready)
-      {
+   for (i <- 0 until max_num_inflight) {
+      when(!inflight_load_buffer(i).valid && io.dmem.req.ready) {
          enq_rdy := true.B
       }
    }

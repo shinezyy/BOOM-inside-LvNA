@@ -886,6 +886,9 @@ class LoadStoreUnit(pl_width: Int)(implicit p: Parameters, edge: freechips.rocke
       when (io.memresp.bits.is_load)
       {
          laq_succeeded(io.memresp.bits.ldq_idx) := true.B
+//         if (DEBUG_LSU) {
+//            printf(p"Loaded value: 0x${Hexadecimal(io.memresp.bits.data)}")
+//         }
       }
       .otherwise
       {

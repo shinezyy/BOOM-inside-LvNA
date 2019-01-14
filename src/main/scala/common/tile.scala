@@ -79,7 +79,9 @@ class BoomTile(
     finalNode.get.address(0)
   }
 
+  println(s"1 nDCachePorts before: $nDCachePorts")
   nDCachePorts += 1 /*core */ + (dtim_adapter.isDefined).toInt
+  println(s"1 nDCachePorts after: $nDCachePorts")
 
   val dtimProperty = dtim_adapter.map(d => Map(
     "sifive,dtim" -> d.device.asProperty)).getOrElse(Nil)

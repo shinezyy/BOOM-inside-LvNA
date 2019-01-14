@@ -34,12 +34,22 @@ trait BOOMDebugConstants
    val debugScreenheight  = 79
 
    // turn off stuff to dramatically reduce Chisel node count
-   val DEBUG_PRINTF_LSU    = true && DEBUG_PRINTF
-   val DEBUG_PRINTF_ROB    = true && DEBUG_PRINTF
-   val DEBUG_PRINTF_TAGE   = true && DEBUG_PRINTF
-   val DEBUG_PRINTF_FTQ    = true && DEBUG_PRINTF
+   val DEBUG_PRINTF_LSU    = false && DEBUG_PRINTF
+   val DEBUG_PRINTF_ROB    = false && DEBUG_PRINTF
+   val DEBUG_PRINTF_TAGE   = false && DEBUG_PRINTF
+   val DEBUG_PRINTF_FTQ    = false && DEBUG_PRINTF
+   val DEBUG_PRINTF_FETCH  = true && DEBUG_PRINTF
+   val DEBUG_FLUSH         = true && DEBUG_PRINTF
+   val DEBUG_ICACHE        = false && DEBUG_PRINTF
+   val DEBUG_TB_FETCH      = false && DEBUG_PRINTF
+   val DEBUG_FETCH_AXI     = false && DEBUG_PRINTF
+   val DEBUG_EXCEPTION     = false && DEBUG_PRINTF
+   val DEBUG_BRANCH        = true && DEBUG_PRINTF
+   val DEBUG_LSU           = true && DEBUG_PRINTF
+   val DEBUG_DCACHE        = true && DEBUG_PRINTF
 
-   if (O3PIPEVIEW_PRINTF) require (!DEBUG_PRINTF && !COMMIT_LOG_PRINTF)
+
+//   if (O3PIPEVIEW_PRINTF) require (!DEBUG_PRINTF && !COMMIT_LOG_PRINTF)
 }
 
 trait BrPredConstants

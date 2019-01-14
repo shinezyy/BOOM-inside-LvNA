@@ -588,6 +588,17 @@ class MemExeUnit(implicit p: Parameters) extends ExecutionUnit(num_rf_read_ports
    io.dmem.req.bits.uop   := io.lsu_io.memreq_uop
    io.dmem.req.bits.kill  := io.lsu_io.memreq_kill // load kill request sent to memory
 
+   if (DEBUG_LSU) {
+      when (io.dmem.req.valid) {
+         printf(p"Inst[${io.lsu_io.memreq_uop.debug_events.fetch_seq}] requesting for address 0x${Hexadecimal(io.lsu_io.memreq_addr)}, ")
+         when (io.dmem.req.bits.uop.mem_cmd === M_XWR) {
+            printf(p"store data 0x${Hexadecimal(io.lsu_io.memreq_wdata)}\n")
+         }.elsewhen( io.dmem.req.bits.uop.mem_cmd === M_XRD) {
+            printf(p"load data\n")
+         }
+      }
+   }
+
    // I should be timing forwarding to coincide with dmem resps, so I'm not clobbering
    //anything....
    val memresp_val    = Mux(io.com_exception && io.dmem.resp.bits.uop.is_load, false.B,
@@ -596,8 +607,16 @@ class MemExeUnit(implicit p: Parameters) extends ExecutionUnit(num_rf_read_ports
                            io.lsu_io.forward_val
    val memresp_uop    = Mux(io.lsu_io.forward_val, io.lsu_io.forward_uop,
                                                 io.dmem.resp.bits.uop)
-
    val memresp_data = Mux(io.lsu_io.forward_val, io.lsu_io.forward_data, io.dmem.resp.bits.data_subword)
+
+   if (DEBUG_LSU) {
+      when (memresp_val) {
+         printf(p"Responsing ${io.dmem.resp.bits.uop.debug_events.fetch_seq}, fowarding: ${io.lsu_io.forward_val}\n")
+         when (memresp_uop.mem_cmd === M_XRD) {
+            printf(p"Responsed data:0x${Hexadecimal(memresp_data)}\n")
+         }
+      }
+   }
 
    io.lsu_io.memresp.valid := memresp_val
    io.lsu_io.memresp.bits  := memresp_uop

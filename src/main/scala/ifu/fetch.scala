@@ -175,6 +175,13 @@ class FetchControlUnit(fetch_width: Int)(implicit p: Parameters) extends BoomMod
 
    io.imem_req.valid   := f0_redirect_val // tell front-end we had an unexpected change in the stream
    io.imem_req.bits.pc := f0_redirect_pc
+
+   if (DEBUG_ICACHE) {
+      when(io.imem_req.valid) {
+         printf(p"Fetch requesting I-Mem 0x${Hexadecimal(io.imem_req.bits.pc)}.\n")
+      }
+   }
+
    io.imem_req.bits.speculative := !(io.flush_take_pc)
    io.imem_resp.ready  := q_f3_imemresp.io.enq.ready
 
@@ -191,6 +198,17 @@ class FetchControlUnit(fetch_width: Int)(implicit p: Parameters) extends BoomMod
          r_f4_req.bits.addr,
          io.f2_btb_resp.bits.target)))))
 
+   if (DEBUG_BRANCH) {
+      when (br_unit.brinfo.mispredict) {
+         printf("take pc: 0x%x, flush_pc: 0x%x, BRU take pc: 0x%x, r_f4_req pc: 0x%x, btb resp pc:0x%x\n",
+            ftq.io.take_pc.bits.addr,
+            io.flush_pc,
+            br_unit.target(vaddrBits,0),
+            r_f4_req.bits.addr,
+            io.f2_btb_resp.bits.target
+         )
+      }
+   }
 
    //-------------------------------------------------------------
    // **** ICache Access (F1) ****
@@ -568,12 +586,12 @@ class FetchControlUnit(fetch_width: Int)(implicit p: Parameters) extends BoomMod
                // TODO for now, manually set the fetch_tsc to point to when the fetch
                // started. This doesn't properly account for i-cache and i-tlb misses. :(
                // Also not factoring in NPC.
-               printf("%d; O3PipeView:fetch:%d:0x%x:0:%d:DASM(%x)\n",
+               printf("%d; O3PipeView:fetch:%d:0x%x:0:%d:DASM(%x)[%x]\n",
                   bundle.debug_events(i).fetch_seq,
                   io.tsc_reg - (2*O3_CYCLE_TIME).U,
                   (bundle.pc.asSInt & (-(fetch_width*coreInstBytes)).S).asUInt + (i << 2).U,
                   bundle.debug_events(i).fetch_seq,
-                  bundle.insts(i))
+                  bundle.insts(i), bundle.insts(i))
             }
          }
       }
@@ -686,7 +704,7 @@ class FetchControlUnit(fetch_width: Int)(implicit p: Parameters) extends BoomMod
    // **** Printfs ****
    //-------------------------------------------------------------
 
-   if (DEBUG_PRINTF)
+   if (DEBUG_PRINTF_FETCH)
    {
       // Fetch Stage 1
       printf("BrPred1:  ------ PC: [%c%c-%c for br_id:(n/a), %c %c next: 0x%x]\n"
@@ -715,7 +733,7 @@ class FetchControlUnit(fetch_width: Int)(implicit p: Parameters) extends BoomMod
       }
       else if (fetch_width == 2)
       {
-         printf("DASM(%x)DASM(%x) "
+         printf("DASM(%x) | DASM(%x) "
             , io.imem_resp.bits.data(2*coreInstBits-1, coreInstBits)
             , io.imem_resp.bits.data(coreInstBits-1,0)
             )

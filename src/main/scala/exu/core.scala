@@ -300,6 +300,9 @@ class BoomCore(implicit p: Parameters, edge: freechips.rocketchip.tilelink.TLEdg
 
    // We must redirect the PC the cycle after playing the SFENCE game.
    io.ifu.flush_take_pc     := rob.io.flush.valid || RegNext(lsu.io.exe_resp.bits.sfence.valid)
+   if (DEBUG_FLUSH) {
+      printf(p"rob flush = ${rob.io.flush.valid}; sfence flush = ${RegNext(lsu.io.exe_resp.bits.sfence.valid)}\n")
+   }
    io.ifu.flush_pc          := RegNext(csr.io.evec)
    io.ifu.com_ftq_idx       := rob.io.com_xcpt.bits.ftq_idx
 
@@ -1224,7 +1227,7 @@ class BoomCore(implicit p: Parameters, edge: freechips.rocketchip.tilelink.TLEdg
    //-------------------------------------------------------------
    //-------------------------------------------------------------
 
-   if (DEBUG_PRINTF)
+   if (DEBUG_PRINTF_FTQ)
    {
       println("\n Chisel Printout Enabled\n")
 

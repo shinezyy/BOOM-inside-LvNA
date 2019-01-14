@@ -21,7 +21,11 @@ trait HasBoomHellaCache { this: BaseTile =>
   val dcache: HellaCache = LazyModule(
     if(tileParams.dcache.get.nMSHRs == 0) {
       new DCache(hartId, findScratchpadFromICache _, p(RocketCrossingKey).head.knownRatio)
-    } else { new NonBlockingDCache(hartId) })
+    } else {
+      new NonBlockingDCache(hartId)
+    }
+  )
+  println(s"Boom nMSHRs: ${tileParams.dcache.get.nMSHRs}")
 
   //tlMasterXbar.node := dcache.node
   val dCacheTap = TLIdentityNode()
@@ -41,7 +45,9 @@ trait HasBoomHellaCacheModule {
 trait CanHaveBoomPTW extends HasTileParameters with HasBoomHellaCache { this: BaseTile =>
   val module: CanHaveBoomPTWModule
   var nPTWPorts = 1
+  println(s"2 nDCachePorts before: $nDCachePorts")
   nDCachePorts += (if (usingPTW) 1 else 0)
+  println(s"2 nDCachePorts after: $nDCachePorts")
 }
 
 

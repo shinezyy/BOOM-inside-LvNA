@@ -279,6 +279,13 @@ class Rob(
                                     !(io.enq_uops(w).is_fencei)
          rob_uop(rob_tail)       := io.enq_uops(w)
          rob_exception(rob_tail) := io.enq_uops(w).exception
+
+         if (DEBUG_EXCEPTION) {
+            when (io.enq_uops(w).exception) {
+               printf(p"[${io.debug_tsc}] Execption caused by inst[${io.enq_uops(w).debug_events.fetch_seq}] entered rob\n")
+            }
+         }
+
          rob_fflags(rob_tail)    := 0.U
          rob_uop(rob_tail).stat_brjmp_mispredicted := false.B
 
@@ -363,13 +370,27 @@ class Rob(
 
       when (io.lxcpt.valid && MatchBank(GetBankIdx(io.lxcpt.bits.uop.rob_idx)))
       {
-         rob_exception(GetRowIdx(io.lxcpt.bits.uop.rob_idx)) := true.B
+         val row_idx = GetRowIdx(io.lxcpt.bits.uop.rob_idx)
+         rob_exception(row_idx) := true.B
+
+         if (DEBUG_EXCEPTION) {
+            printf(p"[${io.debug_tsc}] LSU Exception will be caused by inst[${rob_uop(row_idx).debug_events.fetch_seq}]\n")
+         }
       }
       when (io.bxcpt.valid && MatchBank(GetBankIdx(io.bxcpt.bits.uop.rob_idx)))
       {
-         rob_exception(GetRowIdx(io.bxcpt.bits.uop.rob_idx)) := true.B
+         val row_idx = GetRowIdx(io.bxcpt.bits.uop.rob_idx)
+         rob_exception(row_idx) := true.B
+         if (DEBUG_EXCEPTION) {
+            printf(p"[${io.debug_tsc}] Branch Exception will be caused by inst[${rob_uop(row_idx).debug_events.fetch_seq}]\n")
+         }
       }
       can_throw_exception(w) := rob_val(rob_head) && rob_exception(rob_head)
+      if (DEBUG_EXCEPTION) {
+         when(rob_exception(rob_head)) {
+            printf(p"[${io.debug_tsc}] Exception will be caused by inst[${rob_uop(rob_head).debug_events.fetch_seq}]\n")
+         }
+      }
 
       //-----------------------------------------------
       // Commit or Rollback
@@ -522,6 +543,12 @@ class Rob(
    {
       will_throw_exception = (can_throw_exception(w) && !block_commit && !block_xcpt) || will_throw_exception
 
+      if (DEBUG_EXCEPTION) {
+         when (will_throw_exception) {
+            printf(p"[${io.debug_tsc}] will throw exception by w[$w]\n")
+         }
+      }
+
       will_commit(w)       := can_commit(w) && !can_throw_exception(w) && !block_commit
       block_commit         = (rob_head_vals(w) &&
                              (!can_commit(w) || can_throw_exception(w))) | block_commit
@@ -544,10 +571,15 @@ class Rob(
    io.com_xcpt.bits.ftq_idx := PriorityMux(rob_head_vals, io.commit.uops.map{u => u.ftq_idx})
    io.com_xcpt.bits.pc_lob := PriorityMux(rob_head_vals, io.commit.uops.map{u => u.pc_lob})
 
-   val flush_val =
-      exception_thrown ||
-      io.csr_eret ||
-      (Range(0,width).map{i => io.commit.valids(i) && io.commit.uops(i).flush_on_commit}).reduce(_|_)
+   val inst_flush = Range(0,width).map{i => io.commit.valids(i) && io.commit.uops(i).flush_on_commit}.reduce(_|_)
+
+   val flush_val = exception_thrown || io.csr_eret || inst_flush
+
+   if (DEBUG_FLUSH) {
+      when (flush_val) {
+         printf(p"Flush because of exception[$exception_thrown] eret [${io.csr_eret}] inst flush [$inst_flush]\n")
+      }
+   }
 
    // delay a cycle for critical path considerations
    io.flush.valid := RegNext(flush_val, init=false.B)
