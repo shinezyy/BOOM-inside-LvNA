@@ -181,13 +181,11 @@ class DCMemPortIO(implicit p: Parameters) extends BoomBundle()(p)
 }
 
 class DCacheShim(implicit p: Parameters) extends BoomModule()(p)
-   with freechips.rocketchip.rocket.constants.MemoryOpConstants
-{
+   with freechips.rocketchip.rocket.constants.MemoryOpConstants {
    val max_num_inflight = MAX_LD_COUNT
    isPow2(max_num_inflight)
 
-   val io = IO(new Bundle
-   {
+   val io = IO(new Bundle {
       val core = Flipped(new DCMemPortIO())
       val dmem = new freechips.rocketchip.rocket.HellaCacheIO
    })
@@ -196,29 +194,30 @@ class DCacheShim(implicit p: Parameters) extends BoomModule()(p)
    // we know the store succeeded if it was not nacked
    val cache_load_ack = io.dmem.resp.valid && io.dmem.resp.bits.has_data
 
-   val inflight_load_buffer  = VecInit(Seq.fill(max_num_inflight) {Module(new LoadReqSlot()).io})
+   val inflight_load_buffer = VecInit(Seq.fill(max_num_inflight) {
+      Module(new LoadReqSlot()).io
+   })
 
-   val m1_inflight_tag  = Wire(Bits()) // one cycle ago, aka now in the Mem1 Stage
-   val m2_inflight_tag  = Wire(Bits()) // two cycles ago, aka now in the Mem2 Stage
-   val m2_req_uop       = RegNext(RegNext(io.core.req.bits.uop)) // nack signals come two cycles later
+   val m1_inflight_tag = Wire(Bits()) // one cycle ago, aka now in the Mem1 Stage
+   val m2_inflight_tag = Wire(Bits()) // two cycles ago, aka now in the Mem2 Stage
+   val m2_req_uop = RegNext(RegNext(io.core.req.bits.uop)) // nack signals come two cycles later
 
    val enq_val = io.core.req.valid && (io.core.req.bits.uop.is_load || io.core.req.bits.uop.is_amo)
    val enq_rdy = Wire(Bool())
 
-   for (i <- 0 until max_num_inflight)
-   {
+   for (i <- 0 until max_num_inflight) {
       // don't clr random entry, make sure m1_tag is correct
-      inflight_load_buffer(i).clear       := (cache_load_ack && io.dmem.resp.bits.tag === i.U) ||
-                                             (io.dmem.s2_nack &&
-                                                (m2_req_uop.is_load || m2_req_uop.is_amo) &&
-                                                m2_inflight_tag === i.U &&
-                                                RegNext(RegNext((enq_val && enq_rdy)))) ||
-                                             (io.core.req.bits.kill &&
-                                                m1_inflight_tag === i.U &&
-                                                RegNext(enq_val && enq_rdy))
-      inflight_load_buffer(i).brinfo      := io.core.brinfo
-      inflight_load_buffer(i).flush_pipe  := io.core.flush_pipe
-      inflight_load_buffer(i).in_uop      := io.core.req.bits.uop
+      inflight_load_buffer(i).clear := (cache_load_ack && io.dmem.resp.bits.tag === i.U) ||
+        (io.dmem.s2_nack &&
+          (m2_req_uop.is_load || m2_req_uop.is_amo) &&
+          m2_inflight_tag === i.U &&
+          RegNext(RegNext((enq_val && enq_rdy)))) ||
+        (io.core.req.bits.kill &&
+          m1_inflight_tag === i.U &&
+          RegNext(enq_val && enq_rdy))
+      inflight_load_buffer(i).brinfo := io.core.brinfo
+      inflight_load_buffer(i).flush_pipe := io.core.flush_pipe
+      inflight_load_buffer(i).in_uop := io.core.req.bits.uop
    }
 
 
@@ -247,11 +246,10 @@ class DCacheShim(implicit p: Parameters) extends BoomModule()(p)
    val enq_can_occur = enq_val && enq_rdy
 
    val enq_idx_1h = (1.U << enq_idx) &
-                    Fill(max_num_inflight, enq_can_occur)
+     Fill(max_num_inflight, enq_can_occur)
 
 
-   for (i <- 0 until max_num_inflight)
-   {
+   for (i <- 0 until max_num_inflight) {
       inflight_load_buffer(i).wen := enq_idx_1h(i)
    }
 
@@ -262,8 +260,12 @@ class DCacheShim(implicit p: Parameters) extends BoomModule()(p)
 
    // try to catch if there's a resource leak
    val full_counter = RegInit(0.U(32.W))
-   when (enq_rdy) { full_counter := 0.U }
-   .otherwise     { full_counter := full_counter + 1.U }
+   when(enq_rdy) {
+      full_counter := 0.U
+   }
+     .otherwise {
+        full_counter := full_counter + 1.U
+     }
 
    assert(full_counter <= 10000.U, "Inflight buffers have been busy for 10k cycles. Probably a resource leak.")
 
@@ -275,49 +277,66 @@ class DCacheShim(implicit p: Parameters) extends BoomModule()(p)
    val s1_stdata = RegNext(new freechips.rocketchip.rocket.StoreGen(
       io.core.req.bits.uop.mem_typ, 0.U, io.core.req.bits.data, coreDataBytes).data)
 
-   io.core.req.ready      := enq_rdy && io.dmem.req.ready
-   io.dmem.req.valid      := io.core.req.valid
-   io.dmem.req.bits.typ   := io.core.req.bits.uop.mem_typ
-   io.dmem.req.bits.addr  := io.core.req.bits.addr
-   io.dmem.req.bits.tag   := new_inflight_tag
-   io.dmem.req.bits.cmd   := Mux(io.core.req.valid, io.core.req.bits.uop.mem_cmd, M_PFW)
-   io.dmem.s1_data.data   := s1_stdata // Notice this is delayed a cycle!
-   io.dmem.s1_data.mask   := 0.U // Only used for partial puts from scratchpads.
-   io.dmem.s2_kill        := false.B
-   io.dmem.s1_kill        := io.core.req.bits.kill || iflb_kill // kills request sent out last cycle
-   io.dmem.req.bits.phys  := true.B // we always use physical addresses (TLB is in LSU).
+   io.core.req.ready := enq_rdy && io.dmem.req.ready
+   io.dmem.req.valid := io.core.req.valid
+   io.dmem.req.bits.typ := io.core.req.bits.uop.mem_typ
+   io.dmem.req.bits.addr := io.core.req.bits.addr
+   io.dmem.req.bits.tag := new_inflight_tag
+   io.dmem.req.bits.cmd := Mux(io.core.req.valid, io.core.req.bits.uop.mem_cmd, M_PFW)
+   io.dmem.s1_data.data := s1_stdata // Notice this is delayed a cycle!
+   io.dmem.s1_data.mask := 0.U // Only used for partial puts from scratchpads.
+   io.dmem.s2_kill := false.B
+   io.dmem.s1_kill := io.core.req.bits.kill || iflb_kill // kills request sent out last cycle
+   io.dmem.req.bits.phys := true.B // we always use physical addresses (TLB is in LSU).
+
+   if (DEBUG_LSU) {
+      when (io.core.req.valid) {
+         printf(p"dcacheshim: requesting for address 0x${Hexadecimal(io.core.req.bits.addr)}, ")
+         when (io.core.req.bits.uop.mem_cmd === M_XRD) {
+            printf("load\n")
+         }.elsewhen(io.core.req.bits.uop.mem_cmd === M_XWR) {
+            printf("store 0x%x\n", io.core.req.bits.data)
+         }
+      }
+   }
 
 
-   //------------------------------------------------------------
-   // handle responses and nacks
+   // handle responses and nack
 
    // note: nacks come two cycles after a response, so I'm delaying everything
    // properly to line up stores, loads, nacks, and subword loads.
    // was two cycles ago a store request?
    val was_store_and_not_amo = m2_req_uop.is_store &&
-                               !m2_req_uop.is_amo &&
-                               RegNext(RegNext(io.core.req.valid && io.dmem.req.ready))
+     !m2_req_uop.is_amo &&
+     RegNext(RegNext(io.core.req.valid && io.dmem.req.ready))
 
    // TODO add entry valid bit?
    val resp_tag = io.dmem.resp.bits.tag
 
    io.core.resp.valid := Mux(cache_load_ack,
-                           !inflight_load_buffer(resp_tag).was_killed, // hide loads that were killed
-                         Mux(was_store_and_not_amo && !io.dmem.s2_nack && !RegNext(io.core.req.bits.kill),
-                           true.B,    // stores succeed quietly, so valid if no nack
-                           false.B))  // filter out nacked responses
+      !inflight_load_buffer(resp_tag).was_killed, // hide loads that were killed
+      Mux(was_store_and_not_amo && !io.dmem.s2_nack && !RegNext(io.core.req.bits.kill),
+         true.B, // stores succeed quietly, so valid if no nack
+         false.B)) // filter out nacked responses
 
    val m2_req_valid = was_store_and_not_amo && !io.dmem.s2_nack && !RegNext(io.core.req.bits.kill)
    io.core.resp.bits.uop := Mux(m2_req_valid, m2_req_uop, inflight_load_buffer(resp_tag).out_uop)
 
-   assert (!(cache_load_ack && m2_req_valid), "[dcshim] Two responding uops are conflicting.")
+   assert(!(cache_load_ack && m2_req_valid), "[dcshim] Two responding uops are conflicting.")
 
    // comes out the same cycle as the resp.valid signal
    // but is a few gates slower than resp.bits.data
    // TODO change resp bundle to match the new hellacache resp bundle
    io.core.resp.bits.data_subword := io.dmem.resp.bits.data
-   io.core.resp.bits.data         := io.dmem.resp.bits.data_word_bypass
-   io.core.resp.bits.typ          := io.dmem.resp.bits.typ
+   io.core.resp.bits.data := io.dmem.resp.bits.data_word_bypass
+   io.core.resp.bits.typ := io.dmem.resp.bits.typ
+
+   if (DEBUG_LSU) {
+      when (io.core.resp.valid) {
+         printf(p"D-Cache responsed 0x${Hexadecimal(io.dmem.resp.bits.data)} for address 0x${Hexadecimal(io.dmem.resp.bits.addr)}\n")
+         printf(p"dmem resp valid: ${io.dmem.resp.valid} has data: ${io.dmem.resp.bits.has_data}\n")
+      }
+   }
 
    //------------------------------------------------------------
    // handle nacks from the cache (or from the IFLB or the LSU)
