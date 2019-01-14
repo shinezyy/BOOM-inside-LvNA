@@ -16,6 +16,7 @@ import freechips.rocketchip.tile._
 import boom.exu._
 import boom.ifu._
 import boom.lsu._
+import lvna.HasControlPlaneParameters
 
 case class BoomTileParams(
     core: BoomCoreParams = BoomCoreParams(),
@@ -117,6 +118,7 @@ class BoomTile(
 class BoomTileModuleImp(outer: BoomTile) extends BaseTileModuleImp(outer)
     //with HasLazyRoCCModule[BoomTile]
     with CanHaveBoomPTWModule
+    with HasControlPlaneParameters
     with HasBoomHellaCacheModule
     with HasBoomICacheFrontendModule {
   Annotated.params(this, outer.boomParams)
@@ -139,6 +141,15 @@ class BoomTileModuleImp(outer: BoomTile) extends BaseTileModuleImp(outer)
     lm.module.io.errors.dcache := outer.dcache.module.io.errors
     lm.module.io.errors.icache := outer.frontend.module.io.errors
   }
+
+  val memBase = IO(Input(UInt(p(XLen).W)))
+  val memMask = IO(Input(UInt(p(XLen).W)))
+  outer.dcache.module.memBase := memBase
+  outer.dcache.module.memMask := memMask
+  outer.frontend.module.io.memBase := memBase
+  outer.frontend.module.io.memMask := memMask
+
+  val dsid = IO(Input(UInt(ldomDSidWidth.W)))
 
   outer.decodeCoreInterrupts(core.io.interrupts) // Decode the interrupt vector
   outer.bus_error_unit.foreach { beu => core.io.interrupts.buserror.get := beu.module.io.interrupt }
