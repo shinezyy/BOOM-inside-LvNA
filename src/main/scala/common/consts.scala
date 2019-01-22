@@ -22,10 +22,11 @@ import freechips.rocketchip.util.Str
 
 trait BOOMDebugConstants
 {
+   val DEBUG_ALL           = true
    val DEBUG_PRINTF        = false // use the Chisel printf functionality
-   val COMMIT_LOG_PRINTF   = false // dump commit state, for comparision against ISA sim
+   val COMMIT_LOG_PRINTF   = true // dump commit state, for comparision against ISA sim
    val O3PIPEVIEW_PRINTF   = false // dump trace for O3PipeView from gem5
-   val O3_CYCLE_TIME       = (1000)// "cycle" time expected by o3pipeview.py
+   val O3_CYCLE_TIME       = 1// "cycle" time expected by o3pipeview.py
 
    // When enabling DEBUG_PRINTF, the vertical whitespace can be padded out
    // such that viewing the *.out file in vim can line up veritically to
@@ -34,23 +35,30 @@ trait BOOMDebugConstants
    val debugScreenheight  = 79
 
    // turn off stuff to dramatically reduce Chisel node count
-   val DEBUG_PRINTF_LSU    = false && DEBUG_PRINTF
-   val DEBUG_PRINTF_ROB    = false && DEBUG_PRINTF
-   val DEBUG_PRINTF_TAGE   = false && DEBUG_PRINTF
-   val DEBUG_PRINTF_FTQ    = false && DEBUG_PRINTF
-   val DEBUG_PRINTF_FETCH  = true && DEBUG_PRINTF
-   val DEBUG_FLUSH         = true && DEBUG_PRINTF
-   val DEBUG_ICACHE        = false && DEBUG_PRINTF
-   val DEBUG_TB_FETCH      = false && DEBUG_PRINTF
-   val DEBUG_FETCH_AXI     = false && DEBUG_PRINTF
-   val DEBUG_EXCEPTION     = false && DEBUG_PRINTF
-   val DEBUG_BRANCH        = true && DEBUG_PRINTF
-   val DEBUG_LSU           = true && DEBUG_PRINTF
-   val DEBUG_DCACHE        = true && DEBUG_PRINTF
+   val DEBUG_PRINTF_LSU   :Boolean  = false && DEBUG_ALL
+   val DEBUG_PRINTF_ROB   :Boolean  = false && DEBUG_ALL
+   val DEBUG_PRINTF_TAGE  :Boolean  = false && DEBUG_ALL
+   val DEBUG_PRINTF_FTQ   :Boolean  = false && DEBUG_ALL
+   val DEBUG_PRINTF_FETCH :Boolean  = false && DEBUG_ALL
+   val DEBUG_FLUSH        :Boolean  = false && DEBUG_ALL
+   val DEBUG_ICACHE       :Boolean  = false && DEBUG_ALL
+   val DEBUG_TB_FETCH     :Boolean  = false && DEBUG_ALL
+   val DEBUG_FETCH_AXI    :Boolean  = false && DEBUG_ALL
+   val DEBUG_EXCEPTION    :Boolean  = false && DEBUG_ALL
+   val DEBUG_BRANCH       :Boolean  = false && DEBUG_ALL
+   val DEBUG_LSU          :Boolean  = false && DEBUG_ALL
+   val DEBUG_DCACHE       :Boolean  = false && DEBUG_ALL
 
+   val DEBUG_HELLO        :Boolean  = true && DEBUG_ALL
 
 //   if (O3PIPEVIEW_PRINTF) require (!DEBUG_PRINTF && !COMMIT_LOG_PRINTF)
 }
+
+ trait DebugTicks
+ {
+    val debugStart = 30000000.U
+    val debugEnd   = 35000000.U
+ }
 
 trait BrPredConstants
 {

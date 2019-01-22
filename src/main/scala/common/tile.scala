@@ -166,6 +166,7 @@ class BoomTileModuleImp(outer: BoomTile) extends BaseTileModuleImp(outer)
   core.io.rocc := DontCare
   core.io.fpu := DontCare
   core.io.reset_vector := DontCare
+
   //roccCore.cmd <> core.io.rocc.cmd
   //roccCore.exception := core.io.rocc.exception
   //core.io.rocc.resp <> roccCore.resp
