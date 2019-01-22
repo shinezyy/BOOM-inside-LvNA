@@ -38,6 +38,7 @@ import freechips.rocketchip.rocket.Instructions._
 import freechips.rocketchip.rocket.Causes
 import freechips.rocketchip.util.{Str, UIntIsOneOf}
 import boom.common._
+import constants.DebugTicks
 import boom.exu.FUConstants._
 import boom.util.{GetNewUopAndBrMask, Sext, WrapInc}
 
@@ -229,7 +230,8 @@ class BoomCore(implicit p: Parameters, edge: freechips.rocketchip.tilelink.TLEdg
    // (only used for printf and vcd dumps - the actual counters are in the CSRFile)
    val debug_tsc_reg  = RegInit(0.U(xLen.W))
    val debug_irt_reg  = RegInit(0.U(xLen.W))
-   debug_tsc_reg  := debug_tsc_reg + Mux(O3PIPEVIEW_PRINTF.B, O3_CYCLE_TIME.U, 1.U)
+   debug_tsc_reg  := debug_tsc_reg + 1.U
+//   debug_tsc_reg  := debug_tsc_reg + Mux(O3PIPEVIEW_PRINTF.B, O3_CYCLE_TIME.U, 1.U)
    debug_irt_reg  := debug_irt_reg + PopCount(rob.io.commit.valids.asUInt)
    dontTouch(debug_tsc_reg)
    dontTouch(debug_irt_reg)
@@ -606,7 +608,7 @@ class BoomCore(implicit p: Parameters, edge: freechips.rocketchip.tilelink.TLEdg
          uop.debug_wdata := DontCare
          if (!DEBUG_PRINTF && !COMMIT_LOG_PRINTF) uop.pc := DontCare
          if (!DEBUG_PRINTF && !COMMIT_LOG_PRINTF) uop.inst := DontCare
-         if (!O3PIPEVIEW_PRINTF) uop.debug_events.fetch_seq := DontCare
+//         if (!O3PIPEVIEW_PRINTF) uop.debug_events.fetch_seq := DontCare
       }
    }
 
@@ -767,12 +769,23 @@ class BoomCore(implicit p: Parameters, edge: freechips.rocketchip.tilelink.TLEdg
    csr.io.tval := Mux(tval_valid,
       encodeVirtualAddress(rob.io.com_xcpt.bits.badvaddr, rob.io.com_xcpt.bits.badvaddr), 0.U)
 
+   dprintf(DEBUG_HELLO,
+      debug_tsc_reg > debugStart && debug_tsc_reg < debugEnd && tval_valid,
+      "csr.io.tval = 0x%x, rob.io.com_xcpt.bits.badvaddr = 0x%x\n", csr.io.tval, rob.io.com_xcpt.bits.badvaddr
+   )
+
    // TODO move this function to some central location (since this is used elsewhere).
    def encodeVirtualAddress(a0: UInt, ea: UInt) = if (vaddrBitsExtended == vaddrBits) ea else {
       // Efficient means to compress 64-bit VA into vaddrBits+1 bits.
       // (VA is bad if VA(vaddrBits) != VA(vaddrBits-1)).
       val a = a0.asSInt >> vaddrBits
       val msb = Mux(a === 0.S || a === -1.S, ea(vaddrBits), !ea(vaddrBits-1))
+      // 如果这里送进来的a0是0xfffffxxxxxx，那么msb就会 = 1
+      dprintf(DEBUG_HELLO,
+         debug_tsc_reg > debugStart && debug_tsc_reg < debugEnd && tval_valid,
+         "vaddrBits = %d, a = 0x%x, msb = 0x%x, ea() = 0x%x\n",
+         vaddrBits.U, a, msb, ea(vaddrBits-1)
+      )
       Cat(msb, ea(vaddrBits-1,0))
    }
 
@@ -1387,6 +1400,7 @@ class BoomCore(implicit p: Parameters, edge: freechips.rocketchip.tilelink.TLEdg
 
 
 
+   when (debug_tsc_reg > debugStart && debug_tsc_reg < debugEnd) {
    if (COMMIT_LOG_PRINTF)
    {
       var new_commit_cnt = 0.U
@@ -1416,48 +1430,45 @@ class BoomCore(implicit p: Parameters, edge: freechips.rocketchip.tilelink.TLEdg
          }
       }
    }
+   }
 
    //-------------------------------------------------------------
    //-------------------------------------------------------------
    // Pipeview Visualization
 
-   if (O3PIPEVIEW_PRINTF)
-   {
-      println("   O3Pipeview Visualization Enabled\n")
+   when (debug_tsc_reg > debugStart && debug_tsc_reg < debugEnd) {
+      if (O3PIPEVIEW_PRINTF) {
+         println("   O3Pipeview Visualization Enabled\n")
 
-      // did we already print out the instruction sitting at the front of the fetchbuffer/decode stage?
-      val dec_printed_mask = RegInit(0.U(decodeWidth.W))
+         // did we already print out the instruction sitting at the front of the fetchbuffer/decode stage?
+         val dec_printed_mask = RegInit(0.U(decodeWidth.W))
 
-      for (w <- 0 until decodeWidth)
-      {
-         when (dec_valids(w) && !dec_printed_mask(w)) {
-            printf("%d; O3PipeView:decode:%d\n", dec_uops(w).debug_events.fetch_seq, debug_tsc_reg)
-         }
-         // Rename begins when uop leaves fetch buffer (Dec+Ren1 are in same stage).
-         when (dec_will_fire(w)) {
-            printf("%d; O3PipeView:rename: %d\n", dec_uops(w).debug_events.fetch_seq, debug_tsc_reg)
-         }
-         when (dis_valids(w)) {
-            printf("%d; O3PipeView:dispatch: %d\n", dis_uops(w).debug_events.fetch_seq, debug_tsc_reg)
+         for (w <- 0 until decodeWidth) {
+            when(dec_valids(w) && !dec_printed_mask(w)) {
+               printf("%d; O3PipeView:decode:%d\n", dec_uops(w).debug_events.fetch_seq, debug_tsc_reg)
+            }
+            // Rename begins when uop leaves fetch buffer (Dec+Ren1 are in same stage).
+            when(dec_will_fire(w)) {
+               printf("%d; O3PipeView:rename: %d\n", dec_uops(w).debug_events.fetch_seq, debug_tsc_reg)
+            }
+            when(dis_valids(w)) {
+               printf("%d; O3PipeView:dispatch: %d\n", dis_uops(w).debug_events.fetch_seq, debug_tsc_reg)
+            }
+
+            when(dec_rdy || io.ifu.clear_fetchbuffer) {
+               dec_printed_mask := 0.U
+            }
+              .otherwise {
+                 dec_printed_mask := dec_valids.asUInt | dec_printed_mask
+              }
          }
 
-         when (dec_rdy || io.ifu.clear_fetchbuffer)
-         {
-            dec_printed_mask := 0.U
-         }
-         .otherwise
-         {
-            dec_printed_mask := dec_valids.asUInt | dec_printed_mask
-         }
-      }
-
-      for (i <- 0 until COMMIT_WIDTH)
-      {
-         when (rob.io.commit.valids(i))
-         {
-            printf("%d; O3PipeView:retire:%d:store: 0\n",
-               rob.io.commit.uops(i).debug_events.fetch_seq,
-               debug_tsc_reg)
+         for (i <- 0 until COMMIT_WIDTH) {
+            when(rob.io.commit.valids(i)) {
+               printf("%d; O3PipeView:retire:%d:store: 0\n",
+                  rob.io.commit.uops(i).debug_events.fetch_seq,
+                  debug_tsc_reg)
+            }
          }
       }
    }

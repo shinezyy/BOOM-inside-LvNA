@@ -894,10 +894,11 @@ class LoadStoreUnit(pl_width: Int)(implicit p: Parameters, edge: freechips.rocke
       {
          stq_succeeded(io.memresp.bits.stq_idx) := true.B
 
-         if (O3PIPEVIEW_PRINTF)
-         {
-            // TODO supress printing out a store-comp for lr instructions.
-            printf("%d; store-comp: %d\n", io.memresp.bits.debug_events.fetch_seq, io.debug_tsc)
+         when (io.debug_tsc > debugStart && io.debug_tsc < debugEnd) {
+            if (O3PIPEVIEW_PRINTF) {
+               // TODO supress printing out a store-comp for lr instructions.
+               printf("%d; store-comp: %d\n", io.memresp.bits.debug_events.fetch_seq, io.debug_tsc)
+            }
          }
       }
    }
@@ -1061,6 +1062,19 @@ class LoadStoreUnit(pl_width: Int)(implicit p: Parameters, edge: freechips.rocke
    r_xcpt.uop.br_mask := GetNewBrMask(io.brinfo, mem_xcpt_uop)
    r_xcpt.cause := Mux(mem_xcpt_valid, mem_xcpt_cause, MINI_EXCEPTION_MEM_ORDERING)
    r_xcpt.badvaddr := RegNext(exe_vaddr) // TODO is there another register we can use instead?
+
+   val r_xcpt_valid_prev = RegNext(r_xcpt_valid)
+
+   dprintf(DEBUG_HELLO,
+      io.debug_tsc > debugStart && io.debug_tsc < debugEnd && (r_xcpt_valid || r_xcpt_valid_prev),
+      "saq_addr(stq_retry_idx) = 0x%x, laq_addr(laq_retry_idx) = 0x%x, io.exe_resp.bits.addr = 0x%x\n",
+      saq_addr(stq_retry_idx), laq_addr(laq_retry_idx), io.exe_resp.bits.addr.asUInt
+   )
+
+   dprintf(DEBUG_HELLO,
+      io.debug_tsc > debugStart && io.debug_tsc < debugEnd && (r_xcpt_valid || r_xcpt_valid_prev),
+      "exe_vaddr = 0x%x, badvaddr = 0x%x\n", exe_vaddr, r_xcpt.badvaddr
+   )
 
 
    io.xcpt.valid := r_xcpt_valid && !io.exception && !IsKilledByBranch(io.brinfo, r_xcpt.uop)

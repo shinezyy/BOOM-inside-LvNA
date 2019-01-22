@@ -120,16 +120,15 @@ abstract class IssueUnit(
 
    //-------------------------------------------------------------
 
-   if (O3PIPEVIEW_PRINTF)
-   {
-      for (i <- 0 until issue_width)
-      {
-         // only print stores once!
-         when (io.iss_valids(i) && io.iss_uops(i).uopc =/= uopSTD)
-         {
-            printf("%d; O3PipeView:issue: %d\n",
-               io.iss_uops(i).debug_events.fetch_seq,
-               io.tsc_reg)
+   when (io.tsc_reg > debugStart && io.tsc_reg < debugEnd) {
+      if (O3PIPEVIEW_PRINTF) {
+         for (i <- 0 until issue_width) {
+            // only print stores once!
+            when(io.iss_valids(i) && io.iss_uops(i).uopc =/= uopSTD) {
+               printf("%d; O3PipeView:issue: %d\n",
+                  io.iss_uops(i).debug_events.fetch_seq,
+                  io.tsc_reg)
+            }
          }
       }
    }

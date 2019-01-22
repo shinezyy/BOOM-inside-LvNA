@@ -573,25 +573,23 @@ class FetchControlUnit(fetch_width: Int)(implicit p: Parameters) extends BoomMod
    // **** Pipeview Support ****
    //-------------------------------------------------------------
 
-   if (O3PIPEVIEW_PRINTF)
-   {
-      when (fb.io.enq.fire())
-      {
-         fseq_reg := fseq_reg + PopCount(fb.io.enq.bits.mask)
-         val bundle = fb.io.enq.bits
-         for (i <- 0 until fetch_width)
-         {
-            when (bundle.mask(i))
-            {
-               // TODO for now, manually set the fetch_tsc to point to when the fetch
-               // started. This doesn't properly account for i-cache and i-tlb misses. :(
-               // Also not factoring in NPC.
-               printf("%d; O3PipeView:fetch:%d:0x%x:0:%d:DASM(%x)[%x]\n",
-                  bundle.debug_events(i).fetch_seq,
-                  io.tsc_reg - (2*O3_CYCLE_TIME).U,
-                  (bundle.pc.asSInt & (-(fetch_width*coreInstBytes)).S).asUInt + (i << 2).U,
-                  bundle.debug_events(i).fetch_seq,
-                  bundle.insts(i), bundle.insts(i))
+   when (io.tsc_reg > debugStart && io.tsc_reg < debugEnd) {
+      if (O3PIPEVIEW_PRINTF) {
+         when(fb.io.enq.fire()) {
+            fseq_reg := fseq_reg + PopCount(fb.io.enq.bits.mask)
+            val bundle = fb.io.enq.bits
+            for (i <- 0 until fetch_width) {
+               when(bundle.mask(i)) {
+                  // TODO for now, manually set the fetch_tsc to point to when the fetch
+                  // started. This doesn't properly account for i-cache and i-tlb misses. :(
+                  // Also not factoring in NPC.
+                  printf("%d; O3PipeView:fetch:%d:0x%x:0:%d:DASM(%x)[%x]\n",
+                     bundle.debug_events(i).fetch_seq,
+                     io.tsc_reg - (2 * O3_CYCLE_TIME).U,
+                     (bundle.pc.asSInt & (-(fetch_width * coreInstBytes)).S).asUInt + (i << 2).U,
+                     bundle.debug_events(i).fetch_seq,
+                     bundle.insts(i), bundle.insts(i))
+               }
             }
          }
       }

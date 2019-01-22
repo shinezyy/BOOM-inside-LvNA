@@ -309,11 +309,12 @@ class Rob(
          {
             rob_bsy(row_idx) := false.B
 
-            if (O3PIPEVIEW_PRINTF)
-            {
-               printf("%d; O3PipeView:complete:%d\n",
-                  rob_uop(row_idx).debug_events.fetch_seq,
-                  io.debug_tsc)
+            when (io.debug_tsc > debugStart && io.debug_tsc < debugEnd) {
+               if (O3PIPEVIEW_PRINTF) {
+                  printf("%d; O3PipeView:complete:%d\n",
+                     rob_uop(row_idx).debug_events.fetch_seq,
+                     io.debug_tsc)
+               }
             }
          }
          // TODO check that fflags aren't overwritten
@@ -335,10 +336,11 @@ class Rob(
             assert (rob_val(cidx) === true.B, "[rob] store writing back to invalid entry.")
             assert (rob_bsy(cidx) === true.B, "[rob] store writing back to a not-busy entry.")
 
-            if (O3PIPEVIEW_PRINTF)
-            {
-               printf("%d; O3PipeView:complete:%d\n",
-                  rob_uop(GetRowIdx(clr_rob_idx)).debug_events.fetch_seq, io.debug_tsc)
+            when (io.debug_tsc > debugStart && io.debug_tsc < debugEnd) {
+               if (O3PIPEVIEW_PRINTF) {
+                  printf("%d; O3PipeView:complete:%d\n",
+                     rob_uop(GetRowIdx(clr_rob_idx)).debug_events.fetch_seq, io.debug_tsc)
+               }
             }
          }
       }
@@ -564,6 +566,12 @@ class Rob(
    io.com_xcpt.bits.cause := r_xcpt_uop.exc_cause
 
    io.com_xcpt.bits.badvaddr := Sext(r_xcpt_badvaddr, xLen)
+
+   dprintf(DEBUG_HELLO,
+      io.debug_tsc > debugStart && io.debug_tsc < debugEnd && io.com_xcpt.valid,
+      "io.com_xcpt.bits.badvaddr=0x%x, r_xcpt_badvaddr=0x%x\n", io.com_xcpt.bits.badvaddr, r_xcpt_badvaddr
+   )
+
    val insn_sys_pc2epc =
       rob_head_vals.reduce(_|_) && PriorityMux(rob_head_vals, io.commit.uops.map{u => u.is_sys_pc2epc})
 
@@ -652,6 +660,11 @@ class Rob(
             next_xcpt_uop           := new_xcpt_uop
             next_xcpt_uop.exc_cause := Mux(io.lxcpt.valid, io.lxcpt.bits.cause, io.bxcpt.bits.cause)
             r_xcpt_badvaddr         := Mux(io.lxcpt.valid, io.lxcpt.bits.badvaddr, io.bxcpt.bits.badvaddr)
+            dprintf(DEBUG_HELLO,
+               io.debug_tsc > debugStart && io.debug_tsc < debugEnd,
+               "io.lxcpt.valid = 0x%x, io.lxcpt.bits.badvaddr = 0x%x, io.bxcpt.bits.badvaddr = 0x%x\n",
+               io.lxcpt.valid, io.lxcpt.bits.badvaddr, io.bxcpt.bits.badvaddr
+            )
          }
       }
       .elsewhen (!r_xcpt_val && enq_xcpts.reduce(_|_))
@@ -670,6 +683,11 @@ class Rob(
          }
       }
    }
+
+   println(s"len(r_xcpt_badvaddr) = ${r_xcpt_badvaddr.getWidth}," +
+     s" len(lxcpt.badaddr) = ${io.lxcpt.bits.badvaddr.getWidth}," +
+     s"len(bxcpt.badaddr) = ${io.bxcpt.bits.badvaddr.getWidth}," +
+     s" len(JAL target) = ${ComputeJALTarget(io.enq_uops(0).pc, io.enq_uops(0).inst, xLen).getWidth}")
 
    r_xcpt_uop         := next_xcpt_uop
    r_xcpt_uop.br_mask := GetNewBrMask(io.brinfo, next_xcpt_uop)
