@@ -150,6 +150,8 @@ class BoomTileModuleImp(outer: BoomTile) extends BaseTileModuleImp(outer)
   outer.frontend.module.io.memMask := memMask
 
   val dsid = IO(Input(UInt(ldomDSidWidth.W)))
+  val pc = IO(Output(UInt(vaddrBitsExtended.W)))
+  pc := core.io.ifu.get_pc.fetch_pc
 
   outer.decodeCoreInterrupts(core.io.interrupts) // Decode the interrupt vector
   outer.bus_error_unit.foreach { beu => core.io.interrupts.buserror.get := beu.module.io.interrupt }
