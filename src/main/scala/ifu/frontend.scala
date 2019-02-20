@@ -225,7 +225,7 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
   icache.io.req.valid := s0_valid
   icache.io.req.bits.addr := s0_pc
   icache.io.invalidate := io.cpu.flush_icache
-  val isMMIO = tlb.io.resp.paddr < 0x100000000L.U
+  val isMMIO = tlb.io.resp.paddr < p(MemInitAddr).U
   val lvnaMappedAddr = (tlb.io.resp.paddr & io.memMask) | io.memBase
   icache.io.s1_vaddr := s1_pc
   icache.io.s1_paddr := Mux(isMMIO, tlb.io.resp.paddr, lvnaMappedAddr)

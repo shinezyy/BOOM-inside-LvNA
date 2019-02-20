@@ -289,8 +289,8 @@ class ICacheModule(outer: ICache) extends ICacheBaseModule(outer)
         val data = Mux(s3_slaveValid, s1s3_slaveData, tl_out.d.bits.data)
         dataArray.write(mem_idx, dECC.encode(data))
         if (DEBUG_ICACHE) {
-//          printf(p"Data from TL: 0x${Hexadecimal(tl_out.d.bits.data)}\n")
-          printf(p"Filling to Data Array: ${Binary(data)}\n")
+          printf(p"Data from TL: 0x${Hexadecimal(tl_out.d.bits.data)}\n")
+          printf(p"Filling to Data Array: 0x${Hexadecimal(data)}\n")
         }
       }
       s1_dout(i) := dataArray.read(mem_idx, !wen && s0_ren)
