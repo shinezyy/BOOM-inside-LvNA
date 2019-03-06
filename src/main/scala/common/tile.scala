@@ -16,7 +16,10 @@ import freechips.rocketchip.tile._
 import boom.exu._
 import boom.ifu._
 import boom.lsu._
+import freechips.rocketchip.debug.DebugCSRIntIO
+import ila.{BoomCSRILABundle, FPGATraceBaseBundle}
 import lvna.HasControlPlaneParameters
+
 
 case class BoomTileParams(
     core: BoomCoreParams = BoomCoreParams(),
@@ -144,6 +147,7 @@ class BoomTileModuleImp(outer: BoomTile) extends BaseTileModuleImp(outer)
 
   val memBase = IO(Input(UInt(p(XLen).W)))
   val memMask = IO(Input(UInt(p(XLen).W)))
+
   outer.dcache.module.memBase := memBase
   outer.dcache.module.memMask := memMask
   outer.frontend.module.io.memBase := memBase
@@ -152,6 +156,19 @@ class BoomTileModuleImp(outer: BoomTile) extends BaseTileModuleImp(outer)
   val dsid = IO(Input(UInt(ldomDSidWidth.W)))
   val pc = IO(Output(UInt(vaddrBitsExtended.W)))
   pc := core.io.ifu.get_pc.fetch_pc
+
+  val dmiDebugInterruptIO = IO(new DebugCSRIntIO())
+
+  core.io.dmi_debug_interrupt_io <> dmiDebugInterruptIO
+  when (dmiDebugInterruptIO.dmiInterrupt) {
+    dprintf(DEBUG_ETHER, "tile.io.dmi_int asserted\n")
+  }
+
+  val ila = IO(new BoomCSRILABundle())
+  ila := core.io.ila
+
+  val fpga_trace = IO(new FPGATraceBaseBundle(core.retireWidth))
+  fpga_trace := core.io.fpga_trace
 
   outer.decodeCoreInterrupts(core.io.interrupts) // Decode the interrupt vector
   outer.bus_error_unit.foreach { beu => core.io.interrupts.buserror.get := beu.module.io.interrupt }

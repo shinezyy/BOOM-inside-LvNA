@@ -400,6 +400,12 @@ class DecodeUnit(implicit p: Parameters) extends BoomModule()(p)
       (uop.xcpt_ma_if,   (Causes.misaligned_fetch).U),
       (id_illegal_insn,  (Causes.illegal_instruction).U)))
 
+   if (DEBUG_ALL) {
+      when(io.interrupt) {
+         dprintf(DEBUG_TRACK_INT, "io.int: %b, io.int_cause: 0x%x\n", io.interrupt, io.interrupt_cause)
+      }
+   }
+
    uop.exception := xcpt_valid
    uop.exc_cause := xcpt_cause
 

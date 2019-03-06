@@ -30,9 +30,10 @@ package boom.exu
 import chisel3._
 import chisel3.util._
 import chisel3.experimental.chiselName
+
 import scala.math.ceil
 import freechips.rocketchip.config.Parameters
-import freechips.rocketchip.util.Str
+import freechips.rocketchip.util.{GTimer, Str}
 import boom.common._
 import boom.util._
 
@@ -279,6 +280,11 @@ class Rob(
                                     !(io.enq_uops(w).is_fencei)
          rob_uop(rob_tail)       := io.enq_uops(w)
          rob_exception(rob_tail) := io.enq_uops(w).exception
+
+         if (DEBUG_ALL) {
+            dprintf(DEBUG_TRACK_INT, io.enq_uops(w).exception && io.enq_uops(w).exc_cause(xLen-1),
+               "[%d]ROB: exception cause 0x%x\n", GTimer(), io.enq_uops(w).exc_cause)
+         }
 
          if (DEBUG_EXCEPTION) {
             when (io.enq_uops(w).exception) {

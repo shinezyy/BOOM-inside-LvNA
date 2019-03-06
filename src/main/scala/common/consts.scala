@@ -22,9 +22,9 @@ import freechips.rocketchip.util.Str
 
 trait BOOMDebugConstants
 {
-   val DEBUG_ALL           = true
+   val DEBUG_ALL           = false
    val DEBUG_PRINTF        = false // use the Chisel printf functionality
-   val COMMIT_LOG_PRINTF   = true // dump commit state, for comparision against ISA sim
+   val COMMIT_LOG_PRINTF   = false // dump commit state, for comparision against ISA sim
    val O3PIPEVIEW_PRINTF   = false // dump trace for O3PipeView from gem5
    val O3_CYCLE_TIME       = 1// "cycle" time expected by o3pipeview.py
 
@@ -49,15 +49,19 @@ trait BOOMDebugConstants
    val DEBUG_LSU          :Boolean  = false && DEBUG_ALL
    val DEBUG_DCACHE       :Boolean  = false && DEBUG_ALL
 
-   val DEBUG_HELLO        :Boolean  = true && DEBUG_ALL
+   val DEBUG_HELLO        :Boolean  = false && DEBUG_ALL
+   val DEBUG_ETHER        :Boolean  = false && DEBUG_ALL
+   val DEBUG_ETHER1       :Boolean  = false && DEBUG_ALL
+   val DEBUG_DTM          :Boolean  = false && DEBUG_ALL
+   val DEBUG_TRACK_INT    :Boolean  = false && DEBUG_ALL
 
 //   if (O3PIPEVIEW_PRINTF) require (!DEBUG_PRINTF && !COMMIT_LOG_PRINTF)
 }
 
  trait DebugTicks
  {
-    val debugStart = 30000000.U
-    val debugEnd   = 35000000.U
+    val debugStart = 0.U
+    val debugEnd   = 40000000.U
  }
 
 trait BrPredConstants

@@ -29,18 +29,18 @@
 package boom.exu
 
 import chisel3._
-import chisel3.util._
+import ila.{BoomCSRILABundle, FPGATraceBaseBundle}
 import chisel3.experimental.dontTouch
-
 import freechips.rocketchip.config.Parameters
-
 import freechips.rocketchip.rocket.Instructions._
 import freechips.rocketchip.rocket.Causes
-import freechips.rocketchip.util.{Str, UIntIsOneOf}
+import freechips.rocketchip.util.{GTimer, Str, UIntIsOneOf}
+import freechips.rocketchip.debug._
 import boom.common._
 import constants.DebugTicks
 import boom.exu.FUConstants._
 import boom.util.{GetNewUopAndBrMask, Sext, WrapInc}
+import chisel3.util._
 
 
 //-------------------------------------------------------------
@@ -60,6 +60,11 @@ trait HasBoomCoreIO extends freechips.rocketchip.tile.HasTileParameters {
          val trace = Output(Vec(coreParams.retireWidth,
             new freechips.rocketchip.rocket.TracedInstruction))
          val release = Flipped(Valid(new boom.lsu.ReleaseInfo))
+
+         val dmi_debug_interrupt_io = new DebugCSRIntIO()
+
+         val ila = new BoomCSRILABundle()
+         val fpga_trace = new FPGATraceBaseBundle(retireWidth)
    }
 }
 
@@ -83,7 +88,7 @@ class BoomCore(implicit p: Parameters, edge: freechips.rocketchip.tilelink.TLEdg
      fp_pipeline.io.wb_valids := DontCare
      fp_pipeline.io.wb_pdsts := DontCare
    }
-   
+
    val num_fp_wakeup_ports = if (usingFPU) fp_pipeline.io.wakeups.length else 0
 
    val num_irf_write_ports = exe_units.map(_.num_rf_write_ports).sum
@@ -337,8 +342,30 @@ class BoomCore(implicit p: Parameters, edge: freechips.rocketchip.tilelink.TLEdg
 
    io.ifu.flush := rob.io.flush.valid
 
+   def rob_has_intrpt(): Bool = {
+      rob.io.com_xcpt.valid && rob.io.com_xcpt.bits.cause(xLen-1)
+   }
+
+   val rob_has_intrpt_next = RegNext(rob_has_intrpt(), init=false.B)
+
+   dprintf(DEBUG_TRACK_INT, rob_has_intrpt_next,
+      "[%d] rob.flush to ifu: %b\n", GTimer(), rob.io.flush.valid)
+
    io.ifu.status_prv    := csr.io.status.prv
    io.ifu.status_debug  := csr.io.status.debug
+
+   val irq_handle_trace_dump = RegInit(false.B)
+   csr.io.irq_handle_dump := irq_handle_trace_dump
+
+   val dump_counter = Counter(irq_handle_trace_dump, 1 << 9)
+
+   when(dump_counter._2) { // it will wrap
+      irq_handle_trace_dump := false.B
+   }.elsewhen(rob_has_intrpt() && (rob.io.com_xcpt.bits.cause(3, 0) === 0xe.U ||
+     rob.io.com_xcpt.bits.cause(3, 0) === 0x5.U ||
+     rob.io.com_xcpt.bits.cause(3, 0) === 0x7.U)) {
+      irq_handle_trace_dump := true.B
+   }
 
    //-------------------------------------------------------------
    //-------------------------------------------------------------
@@ -753,6 +780,10 @@ class BoomCore(implicit p: Parameters, edge: freechips.rocketchip.tilelink.TLEdg
    // Cause not valid for for CALL or BREAKPOINTs (CSRFile will override it).
    csr.io.cause     := rob.io.com_xcpt.bits.cause
 
+
+   dprintf(DEBUG_TRACK_INT, rob_has_intrpt(),
+      "[%d] commit xcpt cause 0x%x to CSR\n", GTimer(), rob.io.com_xcpt.bits.cause)
+
    val tval_valid = csr.io.exception &&
       csr.io.cause.isOneOf(
          //Causes.illegal_instruction.U, we currently only write 0x0 for illegal instructions
@@ -801,6 +832,17 @@ class BoomCore(implicit p: Parameters, edge: freechips.rocketchip.tilelink.TLEdg
 
    csr.io.hartid := io.hartid
    csr.io.interrupts := io.interrupts
+
+   csr.io.dmi_debug_interrupt_io <> io.dmi_debug_interrupt_io
+   io.ila := csr.io.ila
+   if (DEBUG_TRACK_INT) {
+      dontTouch(io.ila)
+   }
+
+   when (io.dmi_debug_interrupt_io.dmiInterrupt) {
+      dprintf(DEBUG_ETHER, "core.io.dmi_int asserted\n")
+   }
+
 
 // TODO can we add this back in, but handle reset properly and save us the mux above on csr.io.rw.cmd?
 //   assert (!(csr_rw_cmd =/= rocket.CSR.N && !exe_units(0).io.resp(0).valid), "CSRFile is being written to spuriously.")
@@ -998,6 +1040,13 @@ class BoomCore(implicit p: Parameters, edge: freechips.rocketchip.tilelink.TLEdg
    rob.io.enq_partial_stall := dec_last_inst_was_stalled // TODO come up with better ROB compacting scheme.
    rob.io.debug_tsc := debug_tsc_reg
    rob.io.csr_stall := csr.io.csr_stall
+
+   if (DEBUG_ALL) {
+      rename_stage.io.ren1_uops.foreach {
+         uop => dprintf(DEBUG_TRACK_INT, uop.exception && uop.exc_cause(xLen-1),
+            "[%d] exception cause from rename: 0x%x\n", GTimer(), uop.exc_cause);
+      }
+   }
 
    assert ((dec_will_fire zip rename_stage.io.ren1_mask map {case(d,r) => d === r}).reduce(_|_),
       "[core] Assumption that dec_will_fire and ren1_mask are equal is being violated.")
@@ -1400,8 +1449,9 @@ class BoomCore(implicit p: Parameters, edge: freechips.rocketchip.tilelink.TLEdg
 
 
 
-   when (debug_tsc_reg > debugStart && debug_tsc_reg < debugEnd) {
-   if (COMMIT_LOG_PRINTF)
+//   when ((debug_tsc_reg > debugStart && debug_tsc_reg < debugEnd) || irq_handle_trace_dump ) {
+   when (irq_handle_trace_dump) {
+   if (COMMIT_LOG_PRINTF || DEBUG_TRACK_INT)
    {
       var new_commit_cnt = 0.U
       for (w <- 0 until COMMIT_WIDTH)
@@ -1430,6 +1480,35 @@ class BoomCore(implicit p: Parameters, edge: freechips.rocketchip.tilelink.TLEdg
          }
       }
    }
+   }
+
+   io.fpga_trace.traces.zipWithIndex.foreach { case(trace, w) =>
+
+      trace.valid := rob.io.commit.valids(w)
+
+      val priv = csr.io.status.prv
+      trace.commPriv := priv
+
+      val uop = rob.io.commit.uops(w)
+      trace.commPC := uop.pc
+      trace.commInst := uop.inst
+
+      trace.isFloat := false.B
+      trace.wbValueValid := true.B
+      trace.wbARFN := uop.inst(RD_MSB,RD_LSB)
+      trace.wbValue := uop.debug_wdata
+
+      when (rob.io.commit.uops(w).dst_rtype === RT_FIX && rob.io.commit.uops(w).ldst =/= 0.U)
+      {
+      }
+      .elsewhen (rob.io.commit.uops(w).dst_rtype === RT_FLT)
+      {
+         trace.isFloat := true.B
+      }
+      .otherwise
+      {
+         trace.wbValueValid := false.B
+      }
    }
 
    //-------------------------------------------------------------

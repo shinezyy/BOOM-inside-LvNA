@@ -15,6 +15,8 @@ import freechips.rocketchip.util._
 import freechips.rocketchip.subsystem._
 import freechips.rocketchip.amba.axi4._
 import lvna.TokenBucketNode
+import boom.common._
+import ila.{BoomCSRILABundle, FPGATraceBaseBundle}
 
 
 case object BoomTilesKey extends Field[Seq[boom.common.BoomTileParams]](Nil)
@@ -33,16 +35,11 @@ trait HasBoomTiles extends HasTiles
   // Note that we also inject new nodes into the tile itself,
   // also based on the crossing type.
   val tokenBuckets = Seq.fill(p(NBoomTiles)){ LazyModule(new TokenBucketNode()) }
-  println(boomTileParams)
-  println(crossings)
-  println(p(NBoomTiles))
-  println(tokenBuckets)
-  println(boomTileParams.zip(crossings).zip(tokenBuckets))
   val boomTiles = boomTileParams.zip(crossings).zip(tokenBuckets).map { case ((tp, crossing), tokenBucket) =>
     val boomCore = LazyModule(new boom.common.BoomTile(tp, crossing.crossingType)(augmentedTileParameters(tp)))
       .suggestName(tp.name)
 
-    println("####Connecting interupts for boom core")
+//    println("####Connecting interupts for boom core")
     connectMasterPortsToSBus(boomCore, crossing, tokenBucket)
     connectSlavePortsToCBus(boomCore, crossing)
     connectInterrupts(boomCore, Some(debug), clintOpt, plicOpt)
@@ -54,6 +51,18 @@ trait HasBoomTiles extends HasTiles
 trait HasBoomTilesModuleImp extends HasTilesModuleImp
     with HasPeripheryDebugModuleImp {
   val outer: HasBoomTiles
+
+  outer.boomTiles.zip(outer.debug.module.io.zid).foreach {
+    case (tile, zid) =>
+      tile.module.dmiDebugInterruptIO <> zid
+  }
+
+  outer.boomTiles.zipWithIndex.foreach{ case(tile, i) =>
+    println(s"i=$i, tile=$tile")
+    when (outer.debug.module.io.zid(i).dmiInterrupt) {
+      dprintf(DEBUG_ETHER, "debug.m.io.zid.dit(%d) asserted\n", i.U)
+    }
+  }
 }
 
 class BoomSubsystem(implicit p: Parameters) extends BaseSubsystem
@@ -70,6 +79,13 @@ class BoomSubsystemModule[+L <: BoomSubsystem](_outer: L) extends BaseSubsystemM
     wire.hartid := i.U
     wire.reset_vector := global_reset_vector
   }
+
+  // head: single core only
+  val ila = IO(new BoomCSRILABundle())
+  ila := _outer.tiles.head.module.ila
+
+  val fpga_trace = IO(new FPGATraceBaseBundle(_outer.tiles.head.module.core.retireWidth))
+  fpga_trace := _outer.tiles.head.module.fpga_trace
 }
 
 ///// Adds a port to the system intended to master an AXI4 DRAM controller that supports a large physical address size
