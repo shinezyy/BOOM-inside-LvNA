@@ -48,12 +48,12 @@ package boom.lsu
 import chisel3._
 import chisel3.util._
 import chisel3.experimental.dontTouch
-import freechips.rocketchip.config.Parameters
+import freechips.rocketchip.config.{MemInitAddr, Parameters}
 import freechips.rocketchip.rocket
 import freechips.rocketchip.util.Str
 import boom.common._
 import boom.exu.{BrResolutionInfo, Exception, FlushSignals, FuncUnitResp}
-import boom.util.{AgePriorityEncoder, IsKilledByBranch, GetNewBrMask, WrapInc}
+import boom.util.{AgePriorityEncoder, GetNewBrMask, IsKilledByBranch, WrapInc}
 
 class LoadStoreUnitIO(pl_width: Int)(implicit p: Parameters) extends BoomBundle()(p)
 {
@@ -756,11 +756,13 @@ class LoadStoreUnit(pl_width: Int)(implicit p: Parameters, edge: freechips.rocke
    // do the load and store memory types match (aka, B == BU, H == HU, W == WU)
    def MemTypesMatch(typ_1: UInt, typ_2: UInt) = typ_1(1,0) === typ_2(1,0)
 
+   val isLdMMIO = mem_ld_addr < p(MemInitAddr).U
 
    // TODO totally refactor how conflict/forwarding logic is generated
    for (i <- 0 until num_st_entries)
    {
       val s_addr = saq_addr(i)
+
 
       dword_addr_matches(i) := false.B
 
@@ -795,7 +797,8 @@ class LoadStoreUnit(pl_width: Int)(implicit p: Parameters, edge: freechips.rocke
       forwarding_matches(i) := false.B
       when ((read_mask === write_mask) &&
             !(stq_uop(i).is_fence) &&
-            dword_addr_matches(i))
+            dword_addr_matches(i) &&
+            !isLdMMIO)
       {
          forwarding_matches(i) := true.B
       }
@@ -805,10 +808,13 @@ class LoadStoreUnit(pl_width: Int)(implicit p: Parameters, edge: freechips.rocke
       when ((stq_entry_val(i) &&
                st_dep_mask(i) &&
                (stq_uop(i).is_fence || stq_uop(i).is_amo)) ||
+
             (dword_addr_matches(i) &&
 //               (mem_ld_uop.mem_typ =/= stq_uop(i).mem_typ) &&
                (!MemTypesMatch(mem_ld_uop.mem_typ, stq_uop(i).mem_typ)) &&
-               ((read_mask & write_mask) =/= 0.U)))
+               ((read_mask & write_mask) =/= 0.U)) ||
+
+            isLdMMIO)
       {
          force_ld_to_sleep := true.B
       }
