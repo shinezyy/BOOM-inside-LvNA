@@ -1,17 +1,24 @@
-// See LICENSE.SiFive for license details.
+//******************************************************************************
+// Copyright (c) 2017 - 2018, The Regents of the University of California (Regents).
+// All Rights Reserved. See LICENSE and LICENSE.SiFive for license details.
+//------------------------------------------------------------------------------
+// Author: Christopher Celio
+//------------------------------------------------------------------------------
 
 package boom.system
+
+import scala.collection.mutable.LinkedHashSet
 
 import freechips.rocketchip.subsystem.RocketTilesKey
 import freechips.rocketchip.tile.XLen
 import freechips.rocketchip.util.GeneratorApp
 import freechips.rocketchip.system.{TestGeneration, RegressionTestSuite}
 
-import scala.collection.mutable.LinkedHashSet
-
-/** A Generator for platforms containing Rocket Subsystems */
-object Generator extends GeneratorApp {
-
+/**
+ * A generator for platforms containing Rocket Subsystems
+ */
+object Generator extends GeneratorApp
+{
   val rv64RegrTestNames = LinkedHashSet(
         "rv64ud-v-fcvt",
         "rv64ud-p-fdiv",
@@ -19,7 +26,7 @@ object Generator extends GeneratorApp {
         "rv64uf-v-fadd",
         "rv64um-v-mul",
         // "rv64mi-p-breakpoint", TODO: breakpoints not implemented yet
-        // "rv64uc-v-rvc", TODO: RVC not implemented yet
+        "rv64uc-v-rvc",
         "rv64ud-v-structural",
         "rv64si-p-wfi",
         "rv64um-v-divw",
@@ -57,27 +64,33 @@ object Generator extends GeneratorApp {
     val vm = coreParams.useVM
     val env = if (vm) List("p","v") else List("p")
     coreParams.fpu foreach { case cfg =>
-      if (xlen == 32) {
+      if (xlen == 32)
+      {
         TestGeneration.addSuites(env.map(rv32uf))
-        if (cfg.fLen >= 64) {
+        if (cfg.fLen >= 64)
+        {
           TestGeneration.addSuites(env.map(rv32ud))
         }
-      } else {
-        TestGeneration.addSuite(rv32udBenchmarks)
-        TestGeneration.addSuites(env.map(rv64uf))
-        if (cfg.fLen >= 64) {
+      }
+      else if (cfg.fLen >= 64)
+      {
           TestGeneration.addSuites(env.map(rv64ud))
-        }
+          TestGeneration.addSuites(env.map(rv64uf))
+          TestGeneration.addSuite(rv32udBenchmarks)
       }
     }
-    if (coreParams.useAtomics) {
+    if (coreParams.useAtomics)
+    {
       if (tileParams.dcache.flatMap(_.scratch).isEmpty)
+      {
         TestGeneration.addSuites(env.map(if (xlen == 64) rv64ua else rv32ua))
+      }
       else
+      {
         TestGeneration.addSuites(env.map(if (xlen == 64) rv64uaSansLRSC else rv32uaSansLRSC))
+      }
     }
     if (coreParams.useCompressed) TestGeneration.addSuites(env.map(if (xlen == 64) rv64uc else rv32uc))
-
 
     // Include our BOOM-specific overrides.
     val (rvi, rvu) =

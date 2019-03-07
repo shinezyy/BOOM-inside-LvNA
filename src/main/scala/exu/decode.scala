@@ -1,46 +1,56 @@
 //******************************************************************************
-// Copyright (c) 2015, The Regents of the University of California (Regents).
-// All Rights Reserved. See LICENSE for license details.
+// Copyright (c) 2015 - 2018, The Regents of the University of California (Regents).
+// All Rights Reserved. See LICENSE and LICENSE.SiFive for license details.
+//------------------------------------------------------------------------------
+// Author: Christopher Celio
 //------------------------------------------------------------------------------
 
 package boom.exu
 
 import chisel3._
 import chisel3.util._
-import freechips.rocketchip.config.Parameters
 
+import freechips.rocketchip.config.Parameters
 import freechips.rocketchip.rocket.Instructions._
+import freechips.rocketchip.rocket.RVCExpander
 import freechips.rocketchip.rocket.{CSR,Causes}
 import freechips.rocketchip.util.{uintToBitPat,UIntIsOneOf}
+
 import FUConstants._
 import boom.common._
 import boom.util._
 
-
+// scalastyle:off
+/**
+ * Abstract trait giving defaults and other relevant values to different Decode constants/
+ */
 abstract trait DecodeConstants
    extends freechips.rocketchip.rocket.constants.ScalarOpConstants
    with freechips.rocketchip.rocket.constants.MemoryOpConstants
 {
-// scalastyle:off
   val xpr64 = Y // TODO inform this from xLen
-
+  val DC2 = BitPat.dontCare(2) // Makes the listing below more readable
   def decode_default: List[BitPat] =
-            //                                                                 frs3_en                              wakeup_delay
-            //     is val inst?                                                |  imm sel                           |                    bypassable (aka, known/fixed latency)
-            //     |  is fp inst?                                              |  |     is_load                     |                    |  br/jmp
-            //     |  |  is single-prec?                      rs1 regtype      |  |     |  is_store                 |                    |  |  is jal
-            //     |  |  |  micro-code                         |       rs2 type|  |     |  |  is_amo                |                    |  |  |  allocate_brtag
-            //     |  |  |  |                 func unit        |       |       |  |     |  |  |  is_fence           |                    |  |  |  |
-            //     |  |  |  |                 |                |       |       |  |     |  |  |  |  is_fencei       |                    |  |  |  |  is breakpoint or ecall
-            //     |  |  |  |                 |        dst     |       |       |  |     |  |  |  |  |  mem    mem   |                    |  |  |  |  |  is unique? (clear pipeline for it)
-            //     |  |  |  |                 |        regtype |       |       |  |     |  |  |  |  |  cmd    msk   |                    |  |  |  |  |  |  flush on commit
-            //     |  |  |  |                 |        |       |       |       |  |     |  |  |  |  |  |      |     |                    |  |  |  |  |  |  |  csr cmd
-              List(N, N, X, uopX   , IQT_INT, FU_X   ,RT_X,BitPat.dontCare(2),BitPat.dontCare(2),X,IS_X,X,X,X,X,N, M_X,   MT_X, BitPat.dontCare(2),        X, X, X, X, N, N, X, CSR.X)
+            //                                                                  frs3_en                               wakeup_delay
+            //     is val inst?                                                 |  imm sel                            |    bypassable (aka, known/fixed latency)
+            //     |  is fp inst?                                               |  |     is_load                      |    |  br/jmp
+            //     |  |  is single-prec?                        rs1 regtype     |  |     |  is_store                  |    |  |  is jal
+            //     |  |  |  micro-code                          |       rs2 type|  |     |  |  is_amo                 |    |  |  |  allocate_brtag
+            //     |  |  |  |         iq-type  func unit        |       |       |  |     |  |  |  is_fence            |    |  |  |  |
+            //     |  |  |  |         |        |                |       |       |  |     |  |  |  |  is_fencei        |    |  |  |  |  is breakpoint or ecall?
+            //     |  |  |  |         |        |        dst     |       |       |  |     |  |  |  |  |  mem    mem    |    |  |  |  |  |  is unique? (clear pipeline for it)
+            //     |  |  |  |         |        |        regtype |       |       |  |     |  |  |  |  |  cmd    msk    |    |  |  |  |  |  |  flush on commit
+            //     |  |  |  |         |        |        |       |       |       |  |     |  |  |  |  |  |      |      |    |  |  |  |  |  |  |  csr cmd
+            //     |  |  |  |         |        |        |       |       |       |  |     |  |  |  |  |  |      |      |    |  |  |  |  |  |  |  |
+              List(N, N, X, uopX    , IQT_INT, FU_X   , RT_X  , DC2    ,DC2    ,X, IS_X, X, X, X, X, N, M_X,   MT_X,  DC2, X, X, X, X, N, N, X, CSR.X)
 
   val table: Array[(BitPat, List[BitPat])]
-// scalastyle:on
 }
+// scalastyle:on
 
+/**
+ * Decoded control signals
+ */
 class CtrlSigs extends Bundle
 {
    val legal           = Bool()
@@ -75,20 +85,44 @@ class CtrlSigs extends Bundle
    def decode(inst: UInt, table: Iterable[(BitPat, List[BitPat])]) = {
       val decoder = freechips.rocketchip.rocket.DecodeLogic(inst, XDecode.decode_default, table)
       val sigs =
-         Seq(legal, fp_val, fp_single, uopc, iqtype, fu_code, dst_type, rs1_type
-         , rs2_type, frs3_en, imm_sel, is_load, is_store, is_amo
-         , is_fence, is_fencei, mem_cmd, mem_typ, wakeup_delay, bypassable
-         , br_or_jmp, is_jal, allocate_brtag, is_sys_pc2epc, inst_unique, flush_on_commit, csr_cmd)
+         Seq(legal, fp_val, fp_single, uopc, iqtype, fu_code, dst_type, rs1_type,
+             rs2_type, frs3_en, imm_sel, is_load, is_store, is_amo,
+             is_fence, is_fencei, mem_cmd, mem_typ, wakeup_delay, bypassable,
+             br_or_jmp, is_jal, allocate_brtag, is_sys_pc2epc, inst_unique, flush_on_commit, csr_cmd)
       sigs zip decoder map {case(s,d) => s := d}
       rocc := false.B
       this
    }
 }
 
-
-object XDecode extends DecodeConstants
-{
 // scalastyle:off
+/**
+ * Decode constants for RV32
+ */
+object X32Decode extends DecodeConstants
+{
+             //                                                                  frs3_en                               wakeup_delay
+             //     is val inst?                                                 |  imm sel                            |    bypassable (aka, known/fixed latency)
+             //     |  is fp inst?                                               |  |     is_load                      |    |  br/jmp
+             //     |  |  is single-prec?                        rs1 regtype     |  |     |  is_store                  |    |  |  is jal
+             //     |  |  |  micro-code                          |       rs2 type|  |     |  |  is_amo                 |    |  |  |  allocate_brtag
+             //     |  |  |  |         iq-type  func unit        |       |       |  |     |  |  |  is_fence            |    |  |  |  |
+             //     |  |  |  |         |        |                |       |       |  |     |  |  |  |  is_fencei        |    |  |  |  |  is breakpoint or ecall?
+             //     |  |  |  |         |        |        dst     |       |       |  |     |  |  |  |  |  mem    mem    |    |  |  |  |  |  is unique? (clear pipeline for it)
+             //     |  |  |  |         |        |        regtype |       |       |  |     |  |  |  |  |  cmd    msk    |    |  |  |  |  |  |  flush on commit
+             //     |  |  |  |         |        |        |       |       |       |  |     |  |  |  |  |  |      |      |    |  |  |  |  |  |  |  csr cmd
+   val table: Array[(BitPat, List[BitPat])] = Array(//   |       |       |       |  |     |  |  |  |  |  |      |      |    |  |  |  |  |  |  |  |
+   SLLI_RV32-> List(Y, N, X, uopSLLI , IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_X  , N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
+   SRLI_RV32-> List(Y, N, X, uopSRLI , IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_X  , N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
+   SRAI_RV32-> List(Y, N, X, uopSRAI , IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_X  , N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N)
+   )
+}
+
+/**
+ * Decode constants for RV64
+ */
+object X64Decode extends DecodeConstants
+{
             //                                                                  frs3_en                               wakeup_delay
             //     is val inst?                                                 |  imm sel                            |    bypassable (aka, known/fixed latency)
             //     |  is fp inst?                                               |  |     is_load                      |    |  br/jmp
@@ -101,14 +135,48 @@ object XDecode extends DecodeConstants
             //     |  |  |  |         |        |        |       |       |       |  |     |  |  |  |  |  |      |      |    |  |  |  |  |  |  |  csr cmd
    val table: Array[(BitPat, List[BitPat])] = Array(//  |       |       |       |  |     |  |  |  |  |  |      |      |    |  |  |  |  |  |  |  |
    LD      -> List(Y, N, X, uopLD   , IQT_MEM, FU_MEM , RT_FIX, RT_FIX, RT_X  , N, IS_I, Y, N, N, N, N, M_XRD, MT_D , 3.U, N, N, N, N, N, N, N, CSR.N),
-   LW      -> List(Y, N, X, uopLD   , IQT_MEM, FU_MEM , RT_FIX, RT_FIX, RT_X  , N, IS_I, Y, N, N, N, N, M_XRD, MT_W , 3.U, N, N, N, N, N, N, N, CSR.N),
    LWU     -> List(Y, N, X, uopLD   , IQT_MEM, FU_MEM , RT_FIX, RT_FIX, RT_X  , N, IS_I, Y, N, N, N, N, M_XRD, MT_WU, 3.U, N, N, N, N, N, N, N, CSR.N),
+   SD      -> List(Y, N, X, uopSTA  , IQT_MEM, FU_MEM , RT_X  , RT_FIX, RT_FIX, N, IS_S, N, Y, N, N, N, M_XWR, MT_D , 0.U, N, N, N, N, N, N, N, CSR.N),
+
+   SLLI    -> List(Y, N, X, uopSLLI , IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_X  , N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
+   SRLI    -> List(Y, N, X, uopSRLI , IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_X  , N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
+   SRAI    -> List(Y, N, X, uopSRAI , IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_X  , N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
+
+   ADDIW   -> List(Y, N, X, uopADDIW, IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_X  , N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
+   SLLIW   -> List(Y, N, X, uopSLLIW, IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_X  , N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
+   SRAIW   -> List(Y, N, X, uopSRAIW, IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_X  , N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
+   SRLIW   -> List(Y, N, X, uopSRLIW, IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_X  , N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
+
+   ADDW    -> List(Y, N, X, uopADDW , IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_FIX, N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
+   SUBW    -> List(Y, N, X, uopSUBW , IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_FIX, N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
+   SLLW    -> List(Y, N, X, uopSLLW , IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_FIX, N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
+   SRAW    -> List(Y, N, X, uopSRAW , IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_FIX, N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
+   SRLW    -> List(Y, N, X, uopSRLW , IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_FIX, N, IS_X, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N)
+   )
+}
+
+/**
+ * Overall Decode constants
+ */
+object XDecode extends DecodeConstants
+{
+            //                                                                  frs3_en                               wakeup_delay
+            //     is val inst?                                                 |  imm sel                            |    bypassable (aka, known/fixed latency)
+            //     |  is fp inst?                                               |  |     is_load                      |    |  br/jmp
+            //     |  |  is single-prec?                        rs1 regtype     |  |     |  is_store                  |    |  |  is jal
+            //     |  |  |  micro-code                          |       rs2 type|  |     |  |  is_amo                 |    |  |  |  allocate_brtag
+            //     |  |  |  |         iq-type  func unit        |       |       |  |     |  |  |  is_fence            |    |  |  |  |
+            //     |  |  |  |         |        |                |       |       |  |     |  |  |  |  is_fencei        |    |  |  |  |  is breakpoint or ecall?
+            //     |  |  |  |         |        |        dst     |       |       |  |     |  |  |  |  |  mem    mem    |    |  |  |  |  |  is unique? (clear pipeline for it)
+            //     |  |  |  |         |        |        regtype |       |       |  |     |  |  |  |  |  cmd    msk    |    |  |  |  |  |  |  flush on commit
+            //     |  |  |  |         |        |        |       |       |       |  |     |  |  |  |  |  |      |      |    |  |  |  |  |  |  |  csr cmd
+   val table: Array[(BitPat, List[BitPat])] = Array(//  |       |       |       |  |     |  |  |  |  |  |      |      |    |  |  |  |  |  |  |  |
+   LW      -> List(Y, N, X, uopLD   , IQT_MEM, FU_MEM , RT_FIX, RT_FIX, RT_X  , N, IS_I, Y, N, N, N, N, M_XRD, MT_W , 3.U, N, N, N, N, N, N, N, CSR.N),
    LH      -> List(Y, N, X, uopLD   , IQT_MEM, FU_MEM , RT_FIX, RT_FIX, RT_X  , N, IS_I, Y, N, N, N, N, M_XRD, MT_H , 3.U, N, N, N, N, N, N, N, CSR.N),
    LHU     -> List(Y, N, X, uopLD   , IQT_MEM, FU_MEM , RT_FIX, RT_FIX, RT_X  , N, IS_I, Y, N, N, N, N, M_XRD, MT_HU, 3.U, N, N, N, N, N, N, N, CSR.N),
    LB      -> List(Y, N, X, uopLD   , IQT_MEM, FU_MEM , RT_FIX, RT_FIX, RT_X  , N, IS_I, Y, N, N, N, N, M_XRD, MT_B , 3.U, N, N, N, N, N, N, N, CSR.N),
    LBU     -> List(Y, N, X, uopLD   , IQT_MEM, FU_MEM , RT_FIX, RT_FIX, RT_X  , N, IS_I, Y, N, N, N, N, M_XRD, MT_BU, 3.U, N, N, N, N, N, N, N, CSR.N),
 
-   SD      -> List(Y, N, X, uopSTA  , IQT_MEM, FU_MEM , RT_X  , RT_FIX, RT_FIX, N, IS_S, N, Y, N, N, N, M_XWR, MT_D , 0.U, N, N, N, N, N, N, N, CSR.N),
    SW      -> List(Y, N, X, uopSTA  , IQT_MEM, FU_MEM , RT_X  , RT_FIX, RT_FIX, N, IS_S, N, Y, N, N, N, M_XWR, MT_W , 0.U, N, N, N, N, N, N, N, CSR.N),
    SH      -> List(Y, N, X, uopSTA  , IQT_MEM, FU_MEM , RT_X  , RT_FIX, RT_FIX, N, IS_S, N, Y, N, N, N, M_XWR, MT_H , 0.U, N, N, N, N, N, N, N, CSR.N),
    SB      -> List(Y, N, X, uopSTA  , IQT_MEM, FU_MEM , RT_X  , RT_FIX, RT_FIX, N, IS_S, N, Y, N, N, N, M_XWR, MT_B , 0.U, N, N, N, N, N, N, N, CSR.N),
@@ -121,14 +189,6 @@ object XDecode extends DecodeConstants
    XORI    -> List(Y, N, X, uopXORI , IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_X  , N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
    SLTI    -> List(Y, N, X, uopSLTI , IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_X  , N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
    SLTIU   -> List(Y, N, X, uopSLTIU, IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_X  , N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
-   SLLI    -> List(Y, N, X, uopSLLI , IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_X  , N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
-   SRAI    -> List(Y, N, X, uopSRAI , IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_X  , N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
-   SRLI    -> List(Y, N, X, uopSRLI , IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_X  , N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
-
-   ADDIW   -> List(Y, N, X, uopADDIW, IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_X  , N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
-   SLLIW   -> List(Y, N, X, uopSLLIW, IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_X  , N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
-   SRAIW   -> List(Y, N, X, uopSRAIW, IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_X  , N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
-   SRLIW   -> List(Y, N, X, uopSRLIW, IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_X  , N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
 
    SLL     -> List(Y, N, X, uopSLL  , IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_FIX, N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
    ADD     -> List(Y, N, X, uopADD  , IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_FIX, N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
@@ -140,12 +200,6 @@ object XDecode extends DecodeConstants
    XOR     -> List(Y, N, X, uopXOR  , IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_FIX, N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
    SRA     -> List(Y, N, X, uopSRA  , IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_FIX, N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
    SRL     -> List(Y, N, X, uopSRL  , IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_FIX, N, IS_X, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
-
-   ADDW    -> List(Y, N, X, uopADDW , IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_FIX, N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
-   SUBW    -> List(Y, N, X, uopSUBW , IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_FIX, N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
-   SLLW    -> List(Y, N, X, uopSLLW , IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_FIX, N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
-   SRAW    -> List(Y, N, X, uopSRAW , IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_FIX, N, IS_I, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
-   SRLW    -> List(Y, N, X, uopSRLW , IQT_INT, FU_ALU , RT_FIX, RT_FIX, RT_FIX, N, IS_X, N, N, N, N, N, M_X  , MT_X , 1.U, Y, N, N, N, N, N, N, CSR.N),
 
    MUL     -> List(Y, N, X, uopMUL  , IQT_INT, FU_MUL , RT_FIX, RT_FIX, RT_FIX, N, IS_X, N, N, N, N, N, M_X  , MT_X , 0.U, N, N, N, N, N, N, N, CSR.N),
    MULH    -> List(Y, N, X, uopMULH , IQT_INT, FU_MUL , RT_FIX, RT_FIX, RT_FIX, N, IS_X, N, N, N, N, N, M_X  , MT_X , 0.U, N, N, N, N, N, N, N, CSR.N),
@@ -182,13 +236,13 @@ object XDecode extends DecodeConstants
    CSRRCI  -> List(Y, N, X, uopCSRRCI,IQT_INT, FU_CSR , RT_FIX, RT_PAS, RT_X  , N, IS_I, N, N, N, N, N, M_X  , MT_X , 0.U, N, N, N, N, N, Y, Y, CSR.C),
 
    SFENCE_VMA->List(Y,N, X, uopSFENCE,IQT_MEM, FU_MEM , RT_X  , RT_FIX, RT_FIX, N, IS_X, N, N, N, N, N, M_SFENCE,MT_X,0.U, N, N, N, N, N, Y, Y, CSR.N),
-   SCALL   -> List(Y, N, X, uopSYSTEM,IQT_INT, FU_CSR , RT_X  , RT_X  , RT_X  , N, IS_I, N, N, N, N, N, M_X  , MT_X , 0.U, N, N, N, N, Y, Y, N, CSR.I),
-   SBREAK  -> List(Y, N, X, uopSYSTEM,IQT_INT, FU_CSR , RT_X  , RT_X  , RT_X  , N, IS_I, N, N, N, N, N, M_X  , MT_X , 0.U, N, N, N, N, Y, Y, N, CSR.I),
-   SRET    -> List(Y, N, X, uopSYSTEM,IQT_INT, FU_CSR , RT_X  , RT_X  , RT_X  , N, IS_I, N, N, N, N, N, M_X  , MT_X , 0.U, N, N, N, N, N, Y, N, CSR.I),
-   MRET    -> List(Y, N, X, uopSYSTEM,IQT_INT, FU_CSR , RT_X  , RT_X  , RT_X  , N, IS_I, N, N, N, N, N, M_X  , MT_X , 0.U, N, N, N, N, N, Y, N, CSR.I),
-   DRET    -> List(Y, N, X, uopSYSTEM,IQT_INT, FU_CSR , RT_X  , RT_X  , RT_X  , N, IS_I, N, N, N, N, N, M_X  , MT_X , 0.U, N, N, N, N, N, Y, N, CSR.I),
+   SCALL   -> List(Y, N, X, uopERET  ,IQT_INT, FU_CSR , RT_X  , RT_X  , RT_X  , N, IS_I, N, N, N, N, N, M_X  , MT_X , 0.U, N, N, N, N, Y, Y, Y, CSR.I),
+   SBREAK  -> List(Y, N, X, uopERET  ,IQT_INT, FU_CSR , RT_X  , RT_X  , RT_X  , N, IS_I, N, N, N, N, N, M_X  , MT_X , 0.U, N, N, N, N, Y, Y, Y, CSR.I),
+   SRET    -> List(Y, N, X, uopERET  ,IQT_INT, FU_CSR , RT_X  , RT_X  , RT_X  , N, IS_I, N, N, N, N, N, M_X  , MT_X , 0.U, N, N, N, N, N, Y, Y, CSR.I),
+   MRET    -> List(Y, N, X, uopERET  ,IQT_INT, FU_CSR , RT_X  , RT_X  , RT_X  , N, IS_I, N, N, N, N, N, M_X  , MT_X , 0.U, N, N, N, N, N, Y, Y, CSR.I),
+   DRET    -> List(Y, N, X, uopERET  ,IQT_INT, FU_CSR , RT_X  , RT_X  , RT_X  , N, IS_I, N, N, N, N, N, M_X  , MT_X , 0.U, N, N, N, N, N, Y, Y, CSR.I),
 
-   WFI     -> List(Y, N, X, uopSYSTEM,IQT_INT, FU_CSR , RT_X  , RT_X  , RT_X  , N, IS_X, N, N, N, N, N, M_X  , MT_X , 0.U, N, N, N, N, N, Y, Y, CSR.I),
+   WFI     -> List(Y, N, X, uopWFI   ,IQT_INT, FU_CSR , RT_X  , RT_X  , RT_X  , N, IS_X, N, N, N, N, N, M_X  , MT_X , 0.U, N, N, N, N, N, Y, Y, CSR.I),
 
    FENCE_I -> List(Y, N, X, uopNOP  , IQT_INT, FU_X   , RT_X  , RT_X  , RT_X  , N, IS_X, N, N, N, N, Y, M_X  , MT_X , 0.U, N, N, N, N, N, Y, Y, CSR.N),
    FENCE   -> List(Y, N, X, uopFENCE, IQT_INT, FU_MEM , RT_X  , RT_X  , RT_X  , N, IS_X, N, Y, N, Y, N, M_X  , MT_X , 0.U, N, N, N, N, N, Y, Y, CSR.N), // TODO PERF make fence higher performance
@@ -219,23 +273,24 @@ object XDecode extends DecodeConstants
    SC_W    -> List(Y, N, X, uopAMO_AG, IQT_MEM, FU_MEM, RT_FIX, RT_FIX, RT_FIX, N, IS_X, N, Y, Y, N, N, M_XSC   , MT_W,0.U,N, N, N, N, N, Y, Y, CSR.N), // one which isn't needed
    SC_D    -> List(Y, N, X, uopAMO_AG, IQT_MEM, FU_MEM, RT_FIX, RT_FIX, RT_FIX, N, IS_X, N, Y, Y, N, N, M_XSC   , MT_D,0.U,N, N, N, N, N, Y, Y, CSR.N)
    )
-// scalastyle:on
 }
 
-object FDecode extends DecodeConstants 
+/**
+ * FP Decode constants
+ */
+object FDecode extends DecodeConstants
 {
-// scalastyle:off
   val table: Array[(BitPat, List[BitPat])] = Array(
              //                                                                  frs3_en                               wakeup_delay
-             //                                                                  |  imm sel                            |        bypassable (aka, known/fixed latency)
-             //                                                                  |  |     is_load                      |        |  br/jmp
-             //    is val inst?                                  rs1 regtype     |  |     |  is_store                  |        |  |  is jal
-             //    |  is fp inst?                                |       rs2 type|  |     |  |  is_amo                 |        |  |  |  allocate_brtag
-             //    |  |  is dst single-prec?                     |       |       |  |     |  |  |  is_fence            |        |  |  |  |
-             //    |  |  |  micro-opcode                         |       |       |  |     |  |  |  |  is_fencei        |        |  |  |  |  is breakpoint or ecall
-             //    |  |  |  |           iq_type  func    dst     |       |       |  |     |  |  |  |  |  mem    mem    |        |  |  |  |  |  is unique? (clear pipeline for it)
-             //    |  |  |  |           |        unit    regtype |       |       |  |     |  |  |  |  |  cmd    msk    |        |  |  |  |  |  |  flush on commit
-             //    |  |  |  |           |        |       |       |       |       |  |     |  |  |  |  |  |      |      |        |  |  |  |  |  |  |  csr cmd
+             //                                                                  |  imm sel                            |    bypassable (aka, known/fixed latency)
+             //                                                                  |  |     is_load                      |    |  br/jmp
+             //    is val inst?                                  rs1 regtype     |  |     |  is_store                  |    |  |  is jal
+             //    |  is fp inst?                                |       rs2 type|  |     |  |  is_amo                 |    |  |  |  allocate_brtag
+             //    |  |  is dst single-prec?                     |       |       |  |     |  |  |  is_fence            |    |  |  |  |
+             //    |  |  |  micro-opcode                         |       |       |  |     |  |  |  |  is_fencei        |    |  |  |  |  is breakpoint or ecall
+             //    |  |  |  |           iq_type  func    dst     |       |       |  |     |  |  |  |  |  mem    mem    |    |  |  |  |  |  is unique? (clear pipeline for it)
+             //    |  |  |  |           |        unit    regtype |       |       |  |     |  |  |  |  |  cmd    msk    |    |  |  |  |  |  |  flush on commit
+             //    |  |  |  |           |        |       |       |       |       |  |     |  |  |  |  |  |      |      |    |  |  |  |  |  |  |  csr cmd
    FLW     -> List(Y, Y, Y, uopLD     , IQT_MEM, FU_MEM, RT_FLT, RT_FIX, RT_X  , N, IS_I, Y, N, N, N, N, M_XRD, MT_W , 0.U, N, N, N, N, N, N, N, CSR.N),
    FLD     -> List(Y, Y, N, uopLD     , IQT_MEM, FU_MEM, RT_FLT, RT_FIX, RT_X  , N, IS_I, Y, N, N, N, N, M_XRD, MT_D , 0.U, N, N, N, N, N, N, N, CSR.N),
    FSW     -> List(Y, Y, Y, uopSTA    , IQT_MEM, FU_MEM, RT_X  , RT_FIX, RT_FLT, N, IS_S, N, Y, N, N, N, M_XWR, MT_W , 0.U, N, N, N, N, N, N, N, CSR.N), // sort of a lie; broken into two micro-ops
@@ -312,33 +367,35 @@ object FDecode extends DecodeConstants
    FNMADD_D ->List(Y, Y, N, uopFNMADD_D,IQT_FP,  FU_FPU, RT_FLT, RT_FLT, RT_FLT, Y, IS_X, N, N, N, N, N, M_X  , MT_X , 0.U, N, N, N, N, N, N, N, CSR.N),
    FNMSUB_D ->List(Y, Y, N, uopFNMSUB_D,IQT_FP,  FU_FPU, RT_FLT, RT_FLT, RT_FLT, Y, IS_X, N, N, N, N, N, M_X  , MT_X , 0.U, N, N, N, N, N, N, N, CSR.N)
    )
-
-// scalastyle:on
 }
 
+/**
+ * FP Divide SquareRoot Constants
+ */
 object FDivSqrtDecode extends DecodeConstants
 {
-// scalastyle:off
   val table: Array[(BitPat, List[BitPat])] = Array(
              //                                                                  frs3_en                               wakeup_delay
-             //                                                                  |  imm sel                            |        bypassable (aka, known/fixed latency)
-             //                                                                  |  |     is_load                      |        |  br/jmp
-             //     is val inst?                                 rs1 regtype     |  |     |  is_store                  |        |  |  is jal
-             //     |  is fp inst?                               |       rs2 type|  |     |  |  is_amo                 |        |  |  |  allocate_brtag
-             //     |  |  is dst single-prec?                    |       |       |  |     |  |  |  is_fence            |        |  |  |  |
-             //     |  |  |  micro-opcode                        |       |       |  |     |  |  |  |  is_fencei        |        |  |  |  |  is breakpoint or ecall
-             //     |  |  |  |           iq-type func    dst     |       |       |  |     |  |  |  |  |  mem    mem    |        |  |  |  |  |  is unique? (clear pipeline for it)
-             //     |  |  |  |           |       unit    regtype |       |       |  |     |  |  |  |  |  cmd    msk    |        |  |  |  |  |  |  flush on commit
-             //     |  |  |  |           |       |       |       |       |       |  |     |  |  |  |  |  |      |      |        |  |  |  |  |  |  |  csr cmd
+             //                                                                  |  imm sel                            |    bypassable (aka, known/fixed latency)
+             //                                                                  |  |     is_load                      |    |  br/jmp
+             //     is val inst?                                 rs1 regtype     |  |     |  is_store                  |    |  |  is jal
+             //     |  is fp inst?                               |       rs2 type|  |     |  |  is_amo                 |    |  |  |  allocate_brtag
+             //     |  |  is dst single-prec?                    |       |       |  |     |  |  |  is_fence            |    |  |  |  |
+             //     |  |  |  micro-opcode                        |       |       |  |     |  |  |  |  is_fencei        |    |  |  |  |  is breakpoint or ecall
+             //     |  |  |  |           iq-type func    dst     |       |       |  |     |  |  |  |  |  mem    mem    |    |  |  |  |  |  is unique? (clear pipeline for it)
+             //     |  |  |  |           |       unit    regtype |       |       |  |     |  |  |  |  |  cmd    msk    |    |  |  |  |  |  |  flush on commit
+             //     |  |  |  |           |       |       |       |       |       |  |     |  |  |  |  |  |      |      |    |  |  |  |  |  |  |  csr cmd
    FDIV_S    ->List(Y, Y, Y, uopFDIV_S , IQT_FP, FU_FDV, RT_FLT, RT_FLT, RT_FLT, N, IS_X, N, N, N, N, N, M_X  , MT_X , 0.U, N, N, N, N, N, N, N, CSR.N),
    FDIV_D    ->List(Y, Y, N, uopFDIV_D , IQT_FP, FU_FDV, RT_FLT, RT_FLT, RT_FLT, N, IS_X, N, N, N, N, N, M_X  , MT_X , 0.U, N, N, N, N, N, N, N, CSR.N),
    FSQRT_S   ->List(Y, Y, Y, uopFSQRT_S, IQT_FP, FU_FDV, RT_FLT, RT_FLT, RT_X  , N, IS_X, N, N, N, N, N, M_X  , MT_X , 0.U, N, N, N, N, N, N, N, CSR.N),
    FSQRT_D   ->List(Y, Y, N, uopFSQRT_D, IQT_FP, FU_FDV, RT_FLT, RT_FLT, RT_X  , N, IS_X, N, N, N, N, N, M_X  , MT_X , 0.U, N, N, N, N, N, N, N, CSR.N)
    )
-// scalastyle:on
 }
+//scalastyle:on
 
-
+/**
+ * IO bundle for the Decode unit
+ */
 class DecodeUnitIo(implicit p: Parameters) extends BoomBundle()(p)
 {
    val enq = new Bundle { val uop = Input(new MicroOp()) }
@@ -350,10 +407,11 @@ class DecodeUnitIo(implicit p: Parameters) extends BoomBundle()(p)
    val interrupt = Input(Bool())
    val interrupt_cause = Input(UInt(xLen.W))
 
-   override def cloneType: this.type = new DecodeUnitIo()(p).asInstanceOf[this.type]
 }
 
-// Takes in a single instruction, generates a MicroOp.
+/**
+ * Decode unit that takes in a single instruction and generates a MicroOp.
+ */
 class DecodeUnit(implicit p: Parameters) extends BoomModule()(p)
 {
    val io = IO(new DecodeUnitIo)
@@ -364,30 +422,34 @@ class DecodeUnit(implicit p: Parameters) extends BoomModule()(p)
    var decode_table = XDecode.table
    if (usingFPU) decode_table ++= FDecode.table
    if (usingFPU && usingFDivSqrt) decode_table ++= FDivSqrtDecode.table
+   decode_table ++= (if (xLen == 64) X64Decode.table else X32Decode.table)
 
-   val cs = Wire(new CtrlSigs()).decode(uop.inst, decode_table)
+   val rvc_exp    = Module(new RVCExpander)
+   rvc_exp.io.in := io.enq.uop.inst
+   uop.is_rvc    := rvc_exp.io.rvc
+   val inst       = Mux(rvc_exp.io.rvc, rvc_exp.io.out.bits, io.enq.uop.inst)
 
+   val cs = Wire(new CtrlSigs()).decode(inst, decode_table)
 
    // Exception Handling
-   io.csr_decode.csr := uop.inst(31,20)
-	val csr_en = cs.csr_cmd.isOneOf(CSR.S, CSR.C, CSR.W)
-	val csr_ren = cs.csr_cmd.isOneOf(CSR.S, CSR.C) && uop.lrs1 === 0.U
-	val system_insn = cs.csr_cmd === CSR.I
-	val sfence = cs.uopc === uopSFENCE
+   io.csr_decode.csr := inst(31,20)
+    val csr_en = cs.csr_cmd.isOneOf(CSR.S, CSR.C, CSR.W)
+    val csr_ren = cs.csr_cmd.isOneOf(CSR.S, CSR.C) && uop.lrs1 === 0.U
+    val system_insn = cs.csr_cmd === CSR.I
+    val sfence = cs.uopc === uopSFENCE
 
    val cs_legal = cs.legal
-//   dontTOuch(cs_legal)
+//   dontTouch(cs_legal)
 
    val id_illegal_insn = !cs_legal ||
       cs.fp_val && io.csr_decode.fp_illegal || // TODO check for illegal rm mode: (io.fpu.illegal_rm)
       cs.rocc && io.csr_decode.rocc_illegal ||
-      cs.is_amo && !io.status.isa('a'-'a') ||
+      cs.is_amo && !io.status.isa('a'-'a')  ||
       (cs.fp_val && !cs.fp_single) && !io.status.isa('d'-'a') ||
      csr_en && (io.csr_decode.read_illegal || !csr_ren && io.csr_decode.write_illegal) ||
      ((sfence || system_insn) && io.csr_decode.system_illegal)
 
 //     cs.div && !csr.io.status.isa('m'-'a') || TODO check for illegal div instructions
-
 
    def checkExceptions(x: Seq[(Bool, UInt)]) =
       (x.map(_._1).reduce(_||_), PriorityMux(x))
@@ -413,15 +475,19 @@ class DecodeUnit(implicit p: Parameters) extends BoomModule()(p)
 
    uop.uopc       := cs.uopc
    uop.iqtype     := cs.iqtype
+   if (usingUnifiedMemIntIQs)
+   {
+      when (cs.iqtype === IQT_MEM) { uop.iqtype := IQT_INT }
+   }
    uop.fu_code    := cs.fu_code
 
    // x-registers placed in 0-31, f-registers placed in 32-63.
    // This allows us to straight-up compare register specifiers and not need to
    // verify the rtypes (e.g., bypassing in rename).
-   uop.ldst       := uop.inst(RD_MSB,RD_LSB)
-   uop.lrs1       := uop.inst(RS1_MSB,RS1_LSB)
-   uop.lrs2       := uop.inst(RS2_MSB,RS2_LSB)
-   uop.lrs3       := uop.inst(RS3_MSB,RS3_LSB)
+   uop.ldst       := inst(RD_MSB,RD_LSB)
+   uop.lrs1       := inst(RS1_MSB,RS1_LSB)
+   uop.lrs2       := inst(RS2_MSB,RS2_LSB)
+   uop.lrs3       := inst(RS3_MSB,RS3_LSB)
 
    uop.ldst_val   := cs.dst_type =/= RT_X && !(uop.ldst === 0.U && uop.dst_rtype === RT_FIX)
    uop.dst_rtype  := cs.dst_type
@@ -449,8 +515,8 @@ class DecodeUnit(implicit p: Parameters) extends BoomModule()(p)
    // immediates
 
    // repackage the immediate, and then pass the fewest number of bits around
-   val di24_20 = Mux(cs.imm_sel === IS_B || cs.imm_sel === IS_S, uop.inst(11,7), uop.inst(24,20))
-   uop.imm_packed := Cat(uop.inst(31,25), di24_20, uop.inst(19,12))
+   val di24_20 = Mux(cs.imm_sel === IS_B || cs.imm_sel === IS_S, inst(11,7), inst(24,20))
+   uop.imm_packed := Cat(inst(31,25), di24_20, inst(19,12))
 
    //-------------------------------------------------------------
 
@@ -467,21 +533,27 @@ class DecodeUnit(implicit p: Parameters) extends BoomModule()(p)
    //-------------------------------------------------------------
 
    io.deq.uop := uop
-
-   //-------------------------------------------------------------
-
-   override val compileOptions = chisel3.core.ExplicitCompileOptions.NotStrict.copy(explicitInvalidate = true)
 }
 
+/**
+ * Smaller Decode unit for the Frontend to decode different
+ * branches.
+ * Accepts EXPANDED RVC instructions
+ */
 
-class BranchDecode extends Module
+class BranchDecode(implicit p: Parameters) extends BoomModule
 {
    val io = IO(new Bundle
    {
       val inst    = Input(UInt(32.W))
+      val pc      = Input(UInt(vaddrBitsExtended.W))
       val is_br   = Output(Bool())
       val is_jal  = Output(Bool())
       val is_jalr = Output(Bool())
+      val is_ret  = Output(Bool())
+      val is_call = Output(Bool())
+      val target = Output(UInt(vaddrBitsExtended.W))
+      val cfi_type = Output(UInt(CfiType.SZ.W))
    })
 
    val bpd_csignals =
@@ -508,18 +580,36 @@ class BranchDecode extends Module
    io.is_br   := cs_is_br
    io.is_jal  := cs_is_jal
    io.is_jalr := cs_is_jalr
+   io.is_call := (cs_is_jal || cs_is_jalr) && GetRd(io.inst) === RA
+   io.is_ret  := cs_is_jalr && GetRs1(io.inst) === BitPat("b00?01")
+
+   io.target := Mux(cs_is_br, ComputeBranchTarget(io.pc, io.inst, xLen),
+                              ComputeJALTarget(io.pc, io.inst, xLen))
+   io.cfi_type :=
+      Mux(cs_is_jalr,
+          CfiType.jalr,
+      Mux(cs_is_jal,
+          CfiType.jal,
+      Mux(cs_is_br,
+          CfiType.branch,
+          CfiType.none)))
 }
 
-
-// track the current "branch mask", and give out the branch mask to each micro-op in Decode
-// (each micro-op in the machine has a branch mask which says which branches it
-// is being speculated under).
-
+/**
+ * IO bundle for getting the branch mask
+ */
 class DebugBranchMaskGenerationLogicIO(implicit p: Parameters) extends BoomBundle()(p)
 {
    val branch_mask = UInt(MAX_BR_COUNT.W)
 }
 
+/**
+ * Track the current "branch mask", and give out the branch mask to each micro-op in Decode
+ * (each micro-op in the machine has a branch mask which says which branches it
+ * is being speculated under).
+ *
+ * @param pl_width pipeline width for the processor
+ */
 class BranchMaskGenerationLogic(val pl_width: Int)(implicit p: Parameters) extends BoomModule()(p)
 {
    val io = IO(new Bundle
@@ -604,7 +694,4 @@ class BranchMaskGenerationLogic(val pl_width: Int)(implicit p: Parameters) exten
    }
 
    io.debug.branch_mask := branch_mask
-
-   override val compileOptions = chisel3.core.ExplicitCompileOptions.NotStrict.copy(explicitInvalidate = true)
 }
-

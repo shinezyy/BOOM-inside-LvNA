@@ -1,16 +1,16 @@
 //******************************************************************************
-// Copyright (c) 2015, The Regents of the University of California (Regents).
-// All Rights Reserved. See LICENSE for license details.
+// Copyright (c) 2013 - 2018, The Regents of the University of California (Regents).
+// All Rights Reserved. See LICENSE and LICENSE.SiFive for license details.
+//------------------------------------------------------------------------------
+// Author: Christopher Celio
+//------------------------------------------------------------------------------
+
 //------------------------------------------------------------------------------
 //------------------------------------------------------------------------------
 // Re-order Buffer
 //------------------------------------------------------------------------------
 //------------------------------------------------------------------------------
 //
-// Christopher Celio
-// 2013 Oct 18
-//
-
 // Bank the ROB, such that each "dispatch" group gets its own row of the ROB,
 // and each instruction in the dispatch group goes to a different bank.
 // We can compress out the PC by only saving the high-order bits!
@@ -23,9 +23,10 @@
 //    - commit_width is tied directly to the dispatch_width.
 //    - Exceptions are only taken when at the head of the commit bundle --
 //      this helps deal with loads, stores, and refetch instructions.
-//
 
 package boom.exu
+
+import scala.math.ceil
 
 import chisel3._
 import chisel3.util._
@@ -34,9 +35,17 @@ import chisel3.experimental.chiselName
 import scala.math.ceil
 import freechips.rocketchip.config.Parameters
 import freechips.rocketchip.util.{GTimer, Str}
+
 import boom.common._
 import boom.util._
 
+/**
+ * IO bundle to interact with the ROB
+ *
+ * @param machine_width dispatch and commit width
+ * @param num_wakeup_ports number of wakeup ports to the rob
+ * @param num_fpu_ports number of fpu ports that will write back fflags
+ */
 class RobIo(
    val machine_width: Int,
    val num_wakeup_ports: Int,
@@ -47,7 +56,8 @@ class RobIo(
    // (Allocate, write instruction to ROB).
    val enq_valids       = Input(Vec(machine_width, Bool()))
    val enq_uops         = Input(Vec(machine_width, new MicroOp()))
-   val enq_partial_stall= Input(Bool()) // we're dispatching only a partial packet, and stalling on the rest of it (don't
+   val enq_partial_stall= Input(Bool()) // we're dispatching only a partial packet,
+                                        // and stalling on the rest of it (don't
                                       // advance the tail ptr)
    val enq_new_packet   = Input(Bool()) // we're dispatching the first (and perhaps only) part of a dispatch packet.
    val curr_rob_tail    = Output(UInt(ROB_ADDR_SZ.W))
@@ -81,14 +91,13 @@ class RobIo(
 
    // Communicate exceptions to the CSRFile
    val com_xcpt = Valid(new CommitExceptionSignals())
-   val csr_eret = Input(Bool())
 
    // Let the CSRFile stall us (e.g., wfi).
    val csr_stall = Input(Bool())
 
    // Flush signals (including exceptions, pipeline replays, and memory ordering failures)
    // to send to the frontend for redirection.
-   val flush = Valid(new FlushSignals)
+   val flush = Valid(new CommitExceptionSignals)
 
    // Stall Decode as appropriate
    val empty = Output(Bool())
@@ -100,7 +109,9 @@ class RobIo(
    val debug_tsc = Input(UInt(xLen.W))
 }
 
-
+/**
+ * Bundle to send commit signals across processor
+ */
 class CommitSignals(implicit p: Parameters) extends BoomBundle()(p)
 {
    val valids     = Vec(retireWidth, Bool())
@@ -115,26 +126,27 @@ class CommitSignals(implicit p: Parameters) extends BoomBundle()(p)
    val ld_mask    = Vec(retireWidth, Bool())
 }
 
-
-// TODO combine FlushSignals and ExceptionSignals (currently timed to different cycles).
+/**
+ * Bundle to communicate exceptions to CSRFile
+ *
+ * TODO combine FlushSignals and ExceptionSignals (currently timed to different cycles).
+ */
 class CommitExceptionSignals(implicit p: Parameters) extends BoomBundle()(p)
 {
    val ftq_idx    = UInt(log2Ceil(ftqSz).W)
+   val edge_inst  = Bool()
+   val is_rvc     = Bool()
    val pc_lob     = UInt(log2Ceil(icBlockBytes).W)
    val cause      = UInt(xLen.W)
    val badvaddr   = UInt(xLen.W)
-}
-
 // The ROB needs to tell the FTQ if there's a pipeline flush (and what type)
 // so the FTQ can drive the frontend with the correct redirected PC.
-class FlushSignals(implicit p: Parameters) extends BoomBundle()(p)
-{
-   val ftq_idx = UInt(log2Ceil(ftqSz).W)
-   val pc_lob = UInt(log2Ceil(icBlockBytes).W)
-   val flush_typ = FlushTypes()
+   val flush_typ  = FlushTypes()
 }
 
-// Tell the frontend the type of flush so it can set up the next PC properly.
+/**
+ * Tell the frontend the type of flush so it can set up the next PC properly.
+ */
 object FlushTypes
 {
    def SZ = 3
@@ -161,7 +173,9 @@ object FlushTypes
    }
 }
 
-
+/**
+ * Bundle of signals indicating that an exception occurred
+ */
 class Exception(implicit p: Parameters) extends BoomBundle()(p)
 {
    val uop = new MicroOp()
@@ -169,8 +183,10 @@ class Exception(implicit p: Parameters) extends BoomBundle()(p)
    val badvaddr = UInt(coreMaxAddrBits.W)
 }
 
-
-// These should not be synthesized!
+/**
+ * Bundle for debug ROB signals
+ * These should not be synthesized!
+ */
 class DebugRobSignals(implicit p: Parameters) extends BoomBundle()(p)
 {
    val state = UInt()
@@ -180,16 +196,19 @@ class DebugRobSignals(implicit p: Parameters) extends BoomBundle()(p)
    val xcpt_badvaddr = UInt(xLen.W)
 }
 
-
-// width = the dispatch and commit width of the processor
-// num_wakeup_ports = self-explanatory
-// num_fpu_ports = number of FPU units that will write back fflags
+/**
+ * Reorder Buffer to keep track of dependencies and inflight instructions
+ *
+ * @param width the dispatch and commit width of the processor
+ * @param num_wakeup_ports number of wakeup ports to the ROB
+ * @param num_fpu_ports number of FPU units that will write back fflags
+ */
 @chiselName
 class Rob(
    width: Int,
    num_rob_entries: Int,
    val num_wakeup_ports: Int,
-   num_fpu_ports: Int
+   val num_fpu_ports: Int
    )(implicit p: Parameters) extends BoomModule()(p)
 {
    val io = IO(new RobIo(width, num_wakeup_ports, num_fpu_ports))
@@ -203,7 +222,6 @@ class Rob(
    // ROB Finite State Machine
    val s_reset :: s_normal :: s_rollback :: s_wait_till_empty :: Nil = Enum(4)
    val rob_state = RegInit(s_reset)
-
 
    //commit entries at the head, and unwind exceptions from the tail
    val rob_head = RegInit(0.U(log2Ceil(num_rob_rows).W))
@@ -248,16 +266,13 @@ class Rob(
          val busy = Bool()
          val uop = new MicroOp()
          val exception = Bool()
-         override def cloneType: this.type = new DebugRobBundle().asInstanceOf[this.type]
       }
    val debug_entry = Wire(Vec(NUM_ROB_ENTRIES, new DebugRobBundle))
    debug_entry := DontCare // override in statements below
 
-
    // **************************************************************************
    // --------------------------------------------------------------------------
    // **************************************************************************
-
 
    for (w <- 0 until width)
    {
@@ -359,7 +374,6 @@ class Rob(
          rob_uop(GetRowIdx(io.brinfo.rob_idx)).stat_bpd_mispredicted   := io.brinfo.bpd_mispredict
          rob_uop(GetRowIdx(io.brinfo.rob_idx)).stat_bpd_made_pred      := io.brinfo.bpd_made_pred
       }
-
 
       //-----------------------------------------------
       // Accruing fflags
@@ -488,7 +502,6 @@ class Rob(
          rob_uop(rob_tail).inst := BUBBLE
       }
 
-
       //--------------------------------------------------
       // Debug: for debug purposes, track side-effects to all register destinations
 
@@ -533,7 +546,6 @@ class Rob(
    // **************************************************************************
    // --------------------------------------------------------------------------
    // **************************************************************************
-
 
    // -----------------------------------------------
    // Commit Logic
@@ -582,28 +594,39 @@ class Rob(
       rob_head_vals.reduce(_|_) && PriorityMux(rob_head_vals, io.commit.uops.map{u => u.is_sys_pc2epc})
 
    val refetch_inst = exception_thrown || insn_sys_pc2epc
-   io.com_xcpt.bits.ftq_idx := PriorityMux(rob_head_vals, io.commit.uops.map{u => u.ftq_idx})
-   io.com_xcpt.bits.pc_lob := PriorityMux(rob_head_vals, io.commit.uops.map{u => u.pc_lob})
+   val com_xcpt_uop = PriorityMux(rob_head_vals, io.commit.uops)
+   io.com_xcpt.bits.ftq_idx   := com_xcpt_uop.ftq_idx
+   io.com_xcpt.bits.edge_inst := com_xcpt_uop.edge_inst
+   io.com_xcpt.bits.is_rvc    := com_xcpt_uop.is_rvc
+   io.com_xcpt.bits.pc_lob    := com_xcpt_uop.pc_lob
 
-   val inst_flush = Range(0,width).map{i => io.commit.valids(i) && io.commit.uops(i).flush_on_commit}.reduce(_|_)
+   val flush_commit_mask = Range(0,width).map{i => io.commit.valids(i) && io.commit.uops(i).flush_on_commit}
+   val flush_commit = flush_commit_mask.reduce(_|_)
+   val flush_val = exception_thrown || flush_commit
 
-   val flush_val = exception_thrown || io.csr_eret || inst_flush
+   assert(!(PopCount(flush_commit_mask) > 1.U),
+      "[rob] Can't commit multiple flush_on_commit instructions on one cycle")
 
    if (DEBUG_FLUSH) {
       when (flush_val) {
-         printf(p"Flush because of exception[$exception_thrown] eret [${io.csr_eret}] inst flush [$inst_flush]\n")
+         printf(p"Flush because of exception[$exception_thrown] inst flush [$flush_commit]\n")
       }
    }
+   val flush_uop = Mux(exception_thrown, com_xcpt_uop, Mux1H(flush_commit_mask, io.commit.uops))
 
    // delay a cycle for critical path considerations
-   io.flush.valid := RegNext(flush_val, init=false.B)
-   io.flush.bits.ftq_idx := RegNext(io.com_xcpt.bits.ftq_idx)
-   io.flush.bits.pc_lob := RegNext(io.com_xcpt.bits.pc_lob)
-   io.flush.bits.flush_typ :=
-      RegNext(FlushTypes.getType(flush_val, io.com_xcpt.valid, io.csr_eret, refetch_inst))
+   io.flush.valid          := RegNext(flush_val, init=false.B)
+   io.flush.bits.ftq_idx   := RegNext(flush_uop.ftq_idx)
+   io.flush.bits.pc_lob    := RegNext(flush_uop.pc_lob)
+   io.flush.bits.edge_inst := RegNext(flush_uop.edge_inst)
+   io.flush.bits.is_rvc    := RegNext(flush_uop.is_rvc)
+   io.flush.bits.flush_typ := RegNext(FlushTypes.getType(flush_val,
+                                                         exception_thrown && !is_mini_exception,
+                                                         flush_commit && flush_uop.uopc === uopERET,
+                                                         refetch_inst))
 
    val com_lsu_misspec = RegNext(exception_thrown && io.com_xcpt.bits.cause === MINI_EXCEPTION_MEM_ORDERING)
-   assert (!(com_lsu_misspec && !io.flush.valid), "[rob] pipeline flush not be excercised during a LSU misspeculation")
+   assert (!(com_lsu_misspec && !io.flush.valid), "[rob] pipeline flush not be exercised during a LSU misspeculation")
 
    // -----------------------------------------------
    // FP Exceptions
@@ -680,12 +703,13 @@ class Rob(
          // if no exception yet, dispatch exception wins
          r_xcpt_val      := true.B
          next_xcpt_uop   := io.enq_uops(idx)
-         r_xcpt_badvaddr := io.enq_uops(0).pc + (idx << 2.U)
+         r_xcpt_badvaddr := io.enq_uops(idx).pc + Mux(io.enq_uops(idx).edge_inst, 2.U, 0.U)
          // TODO XXX REMOVE THIS. Temporary hack to fix ma-fetch tests.
          // The problem is we shouldn't have access to pc and inst in the ROB.
          // This should be handled by the front-end.
-         when ((io.enq_uops(idx).uopc === uopJAL) && !io.enq_uops(idx).exc_cause.orR) {
-            r_xcpt_badvaddr := ComputeJALTarget(io.enq_uops(idx).pc, io.enq_uops(idx).inst, xLen)
+         when ((io.enq_uops(idx).uopc === uopJAL) && !io.enq_uops(idx).exc_cause.orR)
+         {
+            r_xcpt_badvaddr := ComputeJALTarget(io.enq_uops(idx).pc, ExpandRVC(io.enq_uops(idx).inst), xLen)
          }
       }
    }
@@ -874,7 +898,6 @@ class Rob(
       }
    }
 
-
    // -----------------------------------------------
    // Outputs
 
@@ -896,7 +919,6 @@ class Rob(
    io.debug.xcpt_uop := r_xcpt_uop
    io.debug.xcpt_badvaddr := r_xcpt_badvaddr
 
-
    if (DEBUG_PRINTF_ROB)
    {
       printf("  RobXcpt[%c%x r:%d b:%x bva:0x%x]\n",
@@ -915,7 +937,7 @@ class Rob(
 //            rob[ 1]           (  )(B ) 0xc71cb68e [flw     fa3, -961(s11)   ][ -                       ] E31,   (d:- p22, bm:e T sdt:57) (d:- p 0, bm:0 - sdt: 0)
 //            rob[ 2] HEAD ---> (vv)( b) 0x00002008 [lui     ra, 0x2          ][addi    ra, ra, 704      ]    ,   (d:x p 2, bm:1 - sdt: 0) (d:x p 3, bm:1 - sdt: 2)
 //            rob[ 3]           (vv)(bb) 0x00002010 [lw      s1, 0(ra)        ][lui     t3, 0xff0        ]    ,   (d:x p 4, bm:0 - sdt: 0) (d:x p 5, bm:0 - sdt: 0)
-//            rob[ 4]      TL-> (v )(b ) 0x00002018 [addiw   t3, t3, 255      ][li      t2, 2            ]    ,   (d:x p 6, bm:0 - sdt: 5) (d:x p 7, bm:0 - sdt: 0)
+//            rob[ 4]      TL-> (v )(b ) 0x00002015 - 2018 [addiw   t3, t3, 255      ][li      t2, 2            ]    ,   (d:x p 6, bm:0 - sdt: 5) (d:x p 7, bm:0 - sdt: 0)
 
          val row = if (COMMIT_WIDTH == 1) r_idx else (r_idx >> log2Ceil(COMMIT_WIDTH))
          val r_head = rob_head
@@ -931,57 +953,57 @@ class Rob(
 
          if (COMMIT_WIDTH == 1)
          {
-            printf("(%c)(%c) 0x%x [DASM(%x)] %c "
-               , Mux(debug_entry(r_idx+0).valid, Str("V"), Str(" "))
-               , Mux(debug_entry(r_idx+0).busy, Str("B"),  Str(" "))
-               , debug_entry(r_idx+0).uop.pc(31,0)
-               , debug_entry(r_idx+0).uop.inst
-               , Mux(debug_entry(r_idx+0).exception, Str("E"), Str("-"))
-               )
+            printf("(%c)(%c) 0x%x [DASM(%x)] %c ",
+                   Mux(debug_entry(r_idx+0).valid, Str("V"), Str(" ")),
+                   Mux(debug_entry(r_idx+0).busy, Str("B"),  Str(" ")),
+                   debug_entry(r_idx+0).uop.pc(31,0),
+                   debug_entry(r_idx+0).uop.inst,
+                   Mux(debug_entry(r_idx+0).exception, Str("E"), Str("-"))
+                   )
          }
          else if (COMMIT_WIDTH == 2)
          {
             val row_is_val = debug_entry(r_idx+0).valid || debug_entry(r_idx+1).valid
-            printf("(%c%c)(%c%c) 0x%x %x [DASM(%x)][DASM(%x)" + "] %c,%c %d,%d "
-               , Mux(debug_entry(r_idx+0).valid, Str("V"), Str(" "))
-               , Mux(debug_entry(r_idx+1).valid, Str("V"), Str(" "))
-               , Mux(debug_entry(r_idx+0).busy,  Str("B"), Str(" "))
-               , Mux(debug_entry(r_idx+1).busy,  Str("B"), Str(" "))
-               , debug_entry(r_idx+0).uop.pc(31,0)
-               , debug_entry(r_idx+1).uop.pc(15,0)
-               , debug_entry(r_idx+0).uop.inst
-               , debug_entry(r_idx+1).uop.inst
-               , Mux(debug_entry(r_idx+0).exception, Str("E"), Str("-"))
-               , Mux(debug_entry(r_idx+1).exception, Str("E"), Str("-"))
-               , debug_entry(r_idx+0).uop.ftq_idx
-               , debug_entry(r_idx+1).uop.ftq_idx
-               )
+            printf("(%c%c)(%c%c) 0x%x %x [DASM(%x)][DASM(%x)" + "] %c,%c %d,%d ",
+                   Mux(debug_entry(r_idx+0).valid, Str("V"), Str(" ")),
+                   Mux(debug_entry(r_idx+1).valid, Str("V"), Str(" ")),
+                   Mux(debug_entry(r_idx+0).busy,  Str("B"), Str(" ")),
+                   Mux(debug_entry(r_idx+1).busy,  Str("B"), Str(" ")),
+                   debug_entry(r_idx+0).uop.pc(31,0),
+                   debug_entry(r_idx+1).uop.pc(15,0),
+                   debug_entry(r_idx+0).uop.inst,
+                   debug_entry(r_idx+1).uop.inst,
+                   Mux(debug_entry(r_idx+0).exception, Str("E"), Str("-")),
+                   Mux(debug_entry(r_idx+1).exception, Str("E"), Str("-")),
+                   debug_entry(r_idx+0).uop.ftq_idx,
+                   debug_entry(r_idx+1).uop.ftq_idx
+                   )
          }
          else if (COMMIT_WIDTH == 4)
          {
             val row_is_val = debug_entry(r_idx+0).valid || debug_entry(r_idx+1).valid || debug_entry(r_idx+2).valid || debug_entry(r_idx+3).valid
-            printf("(%c%c%c%c)(%c%c%c%c) 0x%x %x %x %x [DASM(%x)][DASM(%x)][DASM(%x)][DASM(%x)" + "]%c%c%c%c"
-               , Mux(debug_entry(r_idx+0).valid, Str("V"), Str(" "))
-               , Mux(debug_entry(r_idx+1).valid, Str("V"), Str(" "))
-               , Mux(debug_entry(r_idx+2).valid, Str("V"), Str(" "))
-               , Mux(debug_entry(r_idx+3).valid, Str("V"), Str(" "))
-               , Mux(debug_entry(r_idx+0).busy,  Str("B"), Str(" "))
-               , Mux(debug_entry(r_idx+1).busy,  Str("B"), Str(" "))
-               , Mux(debug_entry(r_idx+2).busy,  Str("B"), Str(" "))
-               , Mux(debug_entry(r_idx+3).busy,  Str("B"), Str(" "))
-               , debug_entry(r_idx+0).uop.pc(23,0)
-               , debug_entry(r_idx+1).uop.pc(15,0)
-               , debug_entry(r_idx+2).uop.pc(15,0)
-               , debug_entry(r_idx+3).uop.pc(15,0)
-               , debug_entry(r_idx+0).uop.inst
-               , debug_entry(r_idx+1).uop.inst
-               , debug_entry(r_idx+2).uop.inst
-               , debug_entry(r_idx+3).uop.inst
-               , Mux(debug_entry(r_idx+0).exception, Str("E"), Str("-"))
-               , Mux(debug_entry(r_idx+1).exception, Str("E"), Str("-"))
-               , Mux(debug_entry(r_idx+2).exception, Str("E"), Str("-"))
-               , Mux(debug_entry(r_idx+3).exception, Str("E"), Str("-"))
-               )
+            printf("(%c%c%c%c)(%c%c%c%c) 0x%x %x %x %x [DASM(%x)][DASM(%x)][DASM(%x)][DASM(%x)" + "]%c%c%c%c",
+                   Mux(debug_entry(r_idx+0).valid, Str("V"), Str(" ")),
+                   Mux(debug_entry(r_idx+1).valid, Str("V"), Str(" ")),
+                   Mux(debug_entry(r_idx+2).valid, Str("V"), Str(" ")),
+                   Mux(debug_entry(r_idx+3).valid, Str("V"), Str(" ")),
+                   Mux(debug_entry(r_idx+0).busy,  Str("B"), Str(" ")),
+                   Mux(debug_entry(r_idx+1).busy,  Str("B"), Str(" ")),
+                   Mux(debug_entry(r_idx+2).busy,  Str("B"), Str(" ")),
+                   Mux(debug_entry(r_idx+3).busy,  Str("B"), Str(" ")),
+                   debug_entry(r_idx+0).uop.pc(23,0),
+                   debug_entry(r_idx+1).uop.pc(15,0),
+                   debug_entry(r_idx+2).uop.pc(15,0),
+                   debug_entry(r_idx+3).uop.pc(15,0),
+                   debug_entry(r_idx+0).uop.inst,
+                   debug_entry(r_idx+1).uop.inst,
+                   debug_entry(r_idx+2).uop.inst,
+                   debug_entry(r_idx+3).uop.inst,
+                   Mux(debug_entry(r_idx+0).exception, Str("E"), Str("-")),
+                   Mux(debug_entry(r_idx+1).exception, Str("E"), Str("-")),
+                   Mux(debug_entry(r_idx+2).exception, Str("E"), Str("-")),
+                   Mux(debug_entry(r_idx+3).exception, Str("E"), Str("-"))
+                   )
          }
          else
          {
@@ -991,14 +1013,14 @@ class Rob(
          var temp_idx = r_idx
          for (w <- 0 until COMMIT_WIDTH)
          {
-            printf("(d:%c p%d, bm:%x sdt:%d) "
-               , Mux(debug_entry(temp_idx).uop.dst_rtype === RT_FIX, Str("X"),
-                 Mux(debug_entry(temp_idx).uop.dst_rtype === RT_PAS, Str("C"),
-                 Mux(debug_entry(temp_idx).uop.dst_rtype === RT_FLT, Str("f"),
-                 Mux(debug_entry(temp_idx).uop.dst_rtype === RT_X, Str("-"), Str("?")))))
-               , debug_entry    (temp_idx).uop.pdst
-               , debug_entry    (temp_idx).uop.br_mask
-               , debug_entry    (temp_idx).uop.stale_pdst
+            printf("(d:%c p%d, bm:%x sdt:%d) ",
+                   Mux(debug_entry(temp_idx).uop.dst_rtype === RT_FIX, Str("X"),
+                   Mux(debug_entry(temp_idx).uop.dst_rtype === RT_PAS, Str("C"),
+                   Mux(debug_entry(temp_idx).uop.dst_rtype === RT_FLT, Str("f"),
+                   Mux(debug_entry(temp_idx).uop.dst_rtype === RT_X, Str("-"), Str("?"))))),
+                   debug_entry    (temp_idx).uop.pdst,
+                   debug_entry    (temp_idx).uop.br_mask,
+                   debug_entry    (temp_idx).uop.stale_pdst
             )
             temp_idx = temp_idx + 1
          }
@@ -1016,7 +1038,6 @@ class Rob(
       "\n   Rob Entries    : " + num_rob_entries +
       "\n   Rob Rows       : " + num_rob_rows +
       "\n   Rob Row size   : " + log2Ceil(num_rob_rows) +
-      "\n   log2UP(width)  : " + log2Ceil(width) +
       "\n   log2Ceil(width): " + log2Ceil(width) +
       "\n   FPU FFlag Ports: " + num_fpu_ports
 }

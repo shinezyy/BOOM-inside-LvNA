@@ -1,6 +1,8 @@
 //******************************************************************************
-// Copyright (c) 2015, The Regents of the University of California (Regents).
-// All Rights Reserved. See LICENSE for license details.
+// Copyright (c) 2015 - 2018, The Regents of the University of California (Regents).
+// All Rights Reserved. See LICENSE and LICENSE.SiFive for license details.
+//------------------------------------------------------------------------------
+// Author: Christopher Celio
 //------------------------------------------------------------------------------
 
 package boom

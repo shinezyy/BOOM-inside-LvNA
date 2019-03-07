@@ -1,9 +1,15 @@
-// See LICENSE.SiFive for license details.
+//******************************************************************************
+// Copyright (c) 2018 - 2018, The Regents of the University of California (Regents).
+// All Rights Reserved. See LICENSE and LICENSE.SiFive for license details.
+//------------------------------------------------------------------------------
+// Author: Christopher Celio
+//------------------------------------------------------------------------------
 
 package boom.system
 
 import chisel3._
 import chisel3.internal.sourceinfo.SourceInfo
+
 import freechips.rocketchip.config.{Field, Parameters}
 import freechips.rocketchip.devices.tilelink._
 import freechips.rocketchip.devices.debug.{HasPeripheryDebug, HasPeripheryDebugModuleImp}
@@ -18,7 +24,6 @@ import lvna.TokenBucketNode
 import boom.common._
 import ila.{BoomCSRILABundle, FPGATraceBaseBundle}
 
-
 case object BoomTilesKey extends Field[Seq[boom.common.BoomTileParams]](Nil)
 
 trait HasBoomTiles extends HasTiles
@@ -29,7 +34,7 @@ trait HasBoomTiles extends HasTiles
 
   protected val boomTileParams = p(BoomTilesKey)
   private val crossings = perTileOrGlobalSetting(p(RocketCrossingKey), boomTileParams.size)
-  
+
   // Make a tile and wire its nodes into the system,
   // according to the specified type of clock crossing.
   // Note that we also inject new nodes into the tile itself,
@@ -49,7 +54,8 @@ trait HasBoomTiles extends HasTiles
 }
 
 trait HasBoomTilesModuleImp extends HasTilesModuleImp
-    with HasPeripheryDebugModuleImp {
+    with HasPeripheryDebugModuleImp
+{
   val outer: HasBoomTiles
 
   outer.boomTiles.zip(outer.debug.module.io.zid).foreach {
@@ -66,13 +72,15 @@ trait HasBoomTilesModuleImp extends HasTilesModuleImp
 }
 
 class BoomSubsystem(implicit p: Parameters) extends BaseSubsystem
-    with HasBoomTiles {
+    with HasBoomTiles
+{
   val tiles = boomTiles
   override lazy val module = new BoomSubsystemModule(this)
 }
 
 class BoomSubsystemModule[+L <: BoomSubsystem](_outer: L) extends BaseSubsystemModuleImp(_outer)
-    with HasBoomTilesModuleImp {
+    with HasBoomTilesModuleImp
+{
   tile_inputs.zip(outer.hartIdList).foreach { case(wire, i) =>
     wire.clock := clock
     wire.reset := reset
@@ -125,7 +133,8 @@ trait CanHaveMisalignedMasterAXI4MemPort { this: BaseSubsystem =>
 }
 
 /** Actually generates the corresponding IO in the concrete Module */
-trait CanHaveMisalignedMasterAXI4MemPortModuleImp extends LazyModuleImp {
+trait CanHaveMisalignedMasterAXI4MemPortModuleImp extends LazyModuleImp
+{
   val outer: CanHaveMisalignedMasterAXI4MemPort
 
   val mem_axi4 = IO(HeterogeneousBag.fromNode(outer.memAXI4Node.in))
