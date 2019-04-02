@@ -167,7 +167,7 @@ class DCacheResp(implicit p: Parameters) extends BoomBundle()(p)
  */
 class DCMemPortIO(implicit p: Parameters) extends BoomBundle()(p)
 {
-   val req     = (new DecoupledIO(new DCacheReq))
+   val req     = new DecoupledIO(new DCacheReq)
    val resp    = Flipped(new ValidIO(new DCacheResp))
 
    val brinfo  = Output(new BrResolutionInfo())

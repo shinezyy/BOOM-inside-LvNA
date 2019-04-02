@@ -346,7 +346,7 @@ class BoomNonBlockingDCacheModule(outer: BoomNonBlockingDCache) extends HellaCac
   }
 
   val cache_resp = Wire(Valid(new HellaCacheResp))
-  cache_resp.valid := (s2_replay || s2_valid_masked && s2_hit) && !s2_data_correctable
+  cache_resp.valid := (s2_replay || s2_valid_masked && s2_hit) && !s2_data_correctable && !isPrefetch(s2_req.cmd)
   cache_resp.bits := s2_req
   cache_resp.bits.has_data := isRead(s2_req.cmd)
   cache_resp.bits.data := loadgen.data | s2_sc_fail
@@ -355,7 +355,7 @@ class BoomNonBlockingDCacheModule(outer: BoomNonBlockingDCache) extends HellaCac
 
   val uncache_resp = Wire(Valid(new HellaCacheResp))
   uncache_resp.bits := mshrs.io.resp.bits
-  uncache_resp.valid := mshrs.io.resp.valid
+  uncache_resp.valid := mshrs.io.resp.valid && !isPrefetch(mshrs.io.resp.bits.cmd)
   mshrs.io.resp.ready := Reg(next= !(s1_valid || s1_replay))
 
   io.cpu.s2_nack := s2_valid && s2_nack
