@@ -43,6 +43,7 @@ import boom.common._
 import constants.DebugTicks
 import boom.exu.FUConstants._
 import boom.util.{GetNewUopAndBrMask, Sext, WrapInc}
+import boom.lsu.pref.{DataflowInfo, ControlFlowInfo}
 import chisel3.util._
 
 /**
@@ -70,6 +71,9 @@ trait HasBoomCoreIO extends freechips.rocketchip.tile.HasTileParameters
 
          val ila = new BoomCSRILABundle()
          val fpga_trace = new FPGATraceBaseBundle(retireWidth)
+
+         val cf = new Valid(new ControlFlowInfo())
+         val df = new Valid(new DataflowInfo())
    }
 }
 
@@ -171,6 +175,12 @@ class BoomCore(implicit p: Parameters, edge: freechips.rocketchip.tilelink.TLEdg
    val br_unit = Wire(new BranchUnitResp())
    val brunit_idx = exe_units.br_unit_idx
    br_unit <> exe_units.br_unit_io
+
+   // control flow info sent to prefetecher
+
+   io.cf.valid := br_unit.brinfo.valid && br_unit.brinfo.taken
+   io.cf.bits.inst_addr := br_unit.pc
+   io.cf.bits.target_addr := br_unit.target
 
    for (eu <- exe_units)
    {
@@ -1056,6 +1066,13 @@ class BoomCore(implicit p: Parameters, edge: freechips.rocketchip.tilelink.TLEdg
    lsu.io.dmem_req_ready := dc_shim.io.core.req.ready
    lsu.io.dmem_is_ordered:= dc_shim.io.core.ordered
    lsu.io.release := io.release
+
+   // mem access info sent to prefetcher
+   io.df.valid := lsu.io.dmem_req_ready
+   io.df.bits.addr := io.dmem.req.bits.addr
+   io.df.bits.cmd := io.dmem.req.bits.cmd
+   io.df.bits.typ := io.dmem.req.bits.typ
+   io.df.bits.pc := exe_units.memory_unit.io.dmem.req.bits.uop.pc
 
    if (usingFPU)
    {

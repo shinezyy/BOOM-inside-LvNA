@@ -18,10 +18,10 @@ import freechips.rocketchip.tilelink._
 import freechips.rocketchip.interrupts._
 import freechips.rocketchip.util._
 import freechips.rocketchip.tile._
-
 import boom.exu._
 import boom.ifu._
-import boom.lsu._
+import boom.lsu.{CanHaveBoomPTW, CanHaveBoomPTWModule, HasBoomHellaCache, HasBoomHellaCacheModule}
+import boom.lsu.pref.{TPCPrefetcher, UsePrefetcher}
 import freechips.rocketchip.debug.DebugCSRIntIO
 import ila.{BoomCSRILABundle, FPGATraceBaseBundle}
 import lvna.HasControlPlaneParameters
@@ -115,7 +115,7 @@ class BoomTile(
   }
 
   println(s"1 nDCachePorts before: $nDCachePorts")
-  nDCachePorts += 1 /*core */ + (dtim_adapter.isDefined).toInt
+  nDCachePorts += 1 /*core */ + (dtim_adapter.isDefined).toInt + p(UsePrefetcher).toInt
   println(s"1 nDCachePorts after: $nDCachePorts")
 
   val dtimProperty = dtim_adapter.map(d => Map(
@@ -247,12 +247,24 @@ class BoomTileModuleImp(outer: BoomTile) extends BaseTileModuleImp(outer)
       .getOrElse(false.B)
   }
 
+  // add prefetcher
+
+  // NOTE: always put it last to indicate lowest priority
+  if (p(UsePrefetcher)) {
+    val prefetcher = Module(new TPCPrefetcher()(outer.p))
+    dcachePorts += prefetcher.io.l1d
+    prefetcher.io.l2 := DontCare
+    prefetcher.io.cf := core.io.cf
+    prefetcher.io.df := core.io.df
+  }
+
   // TODO eliminate this redundancy
   val h = dcachePorts.size
   val c = core.dcacheArbPorts
   val o = outer.nDCachePorts
   require(h == c, s"port list size was $h, core expected $c")
   require(h == o, s"port list size was $h, outer counted $o")
+
   // TODO figure out how to move the below into their respective mix-ins
   dcacheArb.io.requestor <> dcachePorts
   ptwPorts += core.io.ptw_tlb

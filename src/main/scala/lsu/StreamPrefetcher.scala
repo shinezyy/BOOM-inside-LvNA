@@ -1,4 +1,4 @@
-package boom.src.main.scala.lsu
+package boom.lsu.pref
 
 import boom.common.{BoomBundle, BoomModule}
 import chisel3._
@@ -18,7 +18,8 @@ trait T2StateConstants {
 
 trait T2Parameters {
   val SIT_SIZE = 32
-  val StrideCounterWidth = 5
+  val StrideCounterWidth = 6
+  val StrideCounterThreshold = 4
 }
 
 class SITEntry  // Stride identifier table
@@ -30,8 +31,8 @@ class SITEntry  // Stride identifier table
   val lastAddr      = UInt(coreMaxAddrBits.W)
   val lastPrefAddr  = UInt(coreMaxAddrBits.W)
   val delta         = UInt(AddrDeltaWidth.W)
-  val state         = TS_INV
-  val counter       = 0.U(StrideCounterWidth.W)
+  val state         = UInt(TS_SZ.W)
+  val counter       = UInt(StrideCounterWidth.W)
 }
 
 class MPCEntry (implicit p: Parameters) extends BoomModule()(p)
@@ -39,14 +40,14 @@ class MPCEntry (implicit p: Parameters) extends BoomModule()(p)
   with PrefetcherConstants
 {
   val io = IO(new Bundle{
-    val write = Bool()
-    val r_addr = UInt(PCbits.W)
-    val w_addr = UInt(PCbits.W)
-    val eq = Bool()
+    val write = Input(Bool())
+    val r_addr = Input(UInt(Addrbits.W))
+    val w_addr = Input(UInt(Addrbits.W))
+    val eq = Output(Bool())
   })
   val valid = RegInit(false.B)
 
-  val cell = RegInit(0.U(PCbits.W))
+  val cell = RegInit(0.U(Addrbits.W))
   io.eq := valid && (io.r_addr === cell)
   when (io.write) {
     cell := io.w_addr
@@ -70,24 +71,24 @@ class StreamPrefetcher (implicit p: Parameters) extends BoomModule()(p)
 {
   val io = IO(new Bundle() {
     val isInLoop = Input(Bool())
-    val issueMemPC = Input(UInt(PCbits.W))
-    val pred = new DecoupledIO(new CommonSubPrefetcherOut())
+    val pred = new Valid(new CommonSubPrefetcherOut())
     val cf = Flipped(new Valid(new ControlFlowInfo()))
     val df = Flipped(new Valid(new DataflowInfo()))
     val s2_miss = Input(Bool())
   })
 
-  private val mPC = RegInit(0.U(PCbits.W))
+  private val mPC = RegInit(0.U(Addrbits.W))
 
   val data_array = SyncReadMem(SIT_SIZE, new SITEntry())
 
   val mPCEntries = for (i <- 0 until SIT_SIZE) yield {val slot = Module(new MPCEntry()); slot}
   val mPCEntryPorts = VecInit(mPCEntries.map(_.io))
 
-  mPCEntryPorts.foreach{e => e.r_addr := io.df.bits.addr}
+  mPCEntryPorts.foreach{e => e.r_addr := io.df.bits.pc}
 
   val s1_hit_wire = io.df.valid && mPCEntryPorts.map(_.eq).reduce(_|_) // any match
-  val s1_hit_ptr = RegNext(OHToUInt(mPCEntryPorts.map(_.eq)))
+  val s1_hit_ptr_w = OHToUInt(mPCEntryPorts.map(_.eq))
+  val s1_hit_ptr = RegNext(s1_hit_ptr_w)
   val s1_miss_wire = io.df.valid && !s1_hit_wire
 
   val s1_info = Reg(new Valid(new ExpandedSITSignals()))
@@ -97,7 +98,8 @@ class StreamPrefetcher (implicit p: Parameters) extends BoomModule()(p)
   s1_info.bits.miss := s1_miss_wire
   s1_info.bits.addr := io.df.bits.addr
 
-  val s1_read_sit_entry = data_array.read(s1_hit_ptr, s1_hit_wire)
+  val s1_read_sit_entry = Wire(new SITEntry())
+  s1_read_sit_entry := data_array.read(s1_hit_ptr_w, s1_hit_wire)
 
   // s2
   val (sit_alloc_ptr, sit_ptr_wrap) = Counter(s1_info.bits.miss, SIT_SIZE)
@@ -118,6 +120,7 @@ class StreamPrefetcher (implicit p: Parameters) extends BoomModule()(p)
   val s3_wb_entry_w = Wire(new SITEntry())
   s3_wb_entry_w.state := TS_UNK
   s3_wb_entry_w.lastAddr := s2_info.bits.addr
+  s3_wb_entry_w.lastPrefAddr := 0.U
   s3_wb_entry_w.delta := 0.U
   s3_wb_entry_w.counter := 1.U
 
@@ -136,13 +139,24 @@ class StreamPrefetcher (implicit p: Parameters) extends BoomModule()(p)
         s3_wb_entry_w.state := TS_STRD
         s3_wb_entry_w.counter := 1.U
       }.elsewhen (s2_read_sit_entry.state === TS_STRD &&
-        s3_wb_entry_w.counter =/= ((1 << StrideCounterWidth) - 1).U(StrideCounterWidth.W)) { // saturating counter
+        s2_read_sit_entry.counter =/= ((1 << StrideCounterWidth) - 1).U(StrideCounterWidth.W)) { // saturating counter
         s3_wb_entry_w.counter := s2_read_sit_entry.counter + 1.U
       }
     }
   }
+  val pref_addr = WireInit(0.U(Addrbits.W))
+  io.pred.valid := false.B
+  when (s2_read_sit_entry.state === TS_STRD &&
+    s3_wb_entry_w.counter > StrideCounterThreshold.U) {
+    io.pred.valid := true.B
+    io.pred.bits.addr := pref_addr
+    io.pred.bits.confidence := s3_wb_entry_w.counter
+    io.pred.bits.temporality := 0.U
+    s3_wb_entry_w.lastPrefAddr := pref_addr
+  }
 
   data_array.write(s2_info.bits.sit_ptr, s3_wb_entry_w)
+
 }
 
 
