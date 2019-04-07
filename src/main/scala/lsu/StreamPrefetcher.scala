@@ -1,6 +1,7 @@
 package boom.lsu.pref
 
 import boom.common.{BoomBundle, BoomModule}
+import boom.common.util.{RoundRobinCAM, SaturatingCounter}
 import chisel3._
 import chisel3.util._
 import freechips.rocketchip.config.Parameters
@@ -159,5 +160,63 @@ class StreamPrefetcher (implicit p: Parameters) extends BoomModule()(p)
 
 }
 
+class LoopInfo(implicit p: Parameters) extends BoomBundle()(p)
+  with PrefetcherConstants
+{
+  val inLoop = Bool()
+  val branchAddr = UInt(Addrbits.W)
+  val targetAddr = UInt(Addrbits.W)
+}
 
+class LoopPred (implicit p: Parameters) extends BoomModule()(p)
+  with T2Parameters
+  with T2StateConstants
+  with PrefetcherConstants
+{
+  val io = IO(new Bundle() {
+    val cf = Flipped(new Valid(new ControlFlowInfo()))
+    val loop_info = Output(new LoopInfo())
+  })
 
+  // structures
+  val loopInstPC = RegInit(0.U(Addrbits.W))
+  val loopTargetPC = RegInit(0.U(Addrbits.W))
+
+  val inLoop = RegInit(false.B)
+
+  val loopCount = SaturatingCounter(LoopCounterMax)
+  val nlpct = Module(new RoundRobinCAM(UInt(Addrbits.W), NLPCTSize))
+
+  // logic:
+  private val pc = io.cf.bits.inst_addr
+  private val target = io.cf.bits.target_addr
+
+  nlpct.io.search_data.valid := io.cf.valid
+  nlpct.io.search_data.bits := pc
+
+  nlpct.io.insert_data.valid := false.B
+  nlpct.io.insert_data.bits := 0.U
+
+  private val is_backward = pc > target
+  private val found_in_nlpct = nlpct.io.found
+
+  when (is_backward && !found_in_nlpct) {
+    when (io.cf.bits.inst_addr === loopInstPC) {
+      loopCount.inc()
+      inLoop := true.B
+
+    }.otherwise{
+      when (!inLoop || (pc =/= loopInstPC && target =/= loopTargetPC &&
+        pc =/= loopTargetPC && target =/= loopInstPC)) {
+        when (loopCount.value < MinLoopSize.U) {
+          nlpct.io.insert_data.valid := true.B
+          nlpct.io.insert_data.bits := loopInstPC
+        }
+        loopInstPC := pc
+        loopTargetPC := target
+        loopCount.clear()
+        inLoop := false.B
+      }
+    }
+  }
+}

@@ -23,6 +23,10 @@ trait PrefetcherConstants {
 
   val AddrDeltaWidth = 8
   val Addrbits = 48
+
+  val LoopCounterMax = 16
+  val MinLoopSize = 4
+  val NLPCTSize = 16
 }
 
 class ControlFlowInfo(implicit p: Parameters) extends BoomBundle()(p)
@@ -75,6 +79,9 @@ class TPCPrefetcher(implicit p: Parameters) extends BoomModule()(p)
     val l2 = new HellaCacheIO()
   })
 
+  val loopPred = Module(new LoopPred())
+  loopPred.io.cf := io.cf
+
   def set_default_hello_req(dc_port: HellaCacheIO): Unit = {
     dc_port.req.valid := false.B
     dc_port.req.bits.typ := MT_W  // usually prefetch a word?
@@ -97,7 +104,8 @@ class TPCPrefetcher(implicit p: Parameters) extends BoomModule()(p)
   T2.io.df := io.df
   T2.io.cf := io.cf
   T2.io.s2_miss := io.l1d.s2_primary_miss
-  T2.io.isInLoop := true.B
+  T2.io.isInLoop := loopPred.io.loop_info.inLoop
+
 
   when (T2.io.pred.valid) {
     when (T2.io.pred.bits.confidence > ConfidenceThreshold.U) {
