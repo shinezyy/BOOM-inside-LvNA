@@ -3,8 +3,10 @@ package boom.lsu.pref
 import boom.common._
 import boom.common.util.{RoundRobinCAM, SaturatingCounter}
 import chisel3._
+import chisel3.internal.naming.chiselName
 import chisel3.util._
 import freechips.rocketchip.config.Parameters
+import freechips.rocketchip.util.GTimer
 
 trait T2StateConstants {
   val TS_SZ   = 3
@@ -44,6 +46,9 @@ class MPCEntry (implicit p: Parameters) extends BoomModule()(p)
     val r_addr = Input(UInt(Addrbits.W))
     val w_addr = Input(UInt(Addrbits.W))
     val eq = Output(Bool())
+
+    // debug
+    val cell = Output(UInt(Addrbits.W))
   })
   val valid = RegInit(false.B)
 
@@ -53,6 +58,7 @@ class MPCEntry (implicit p: Parameters) extends BoomModule()(p)
     cell := io.w_addr
     valid := true.B
   }
+  io.cell := cell
 }
 
 class ExpandedSITSignals (implicit p: Parameters) extends BoomBundle()(p)
@@ -61,7 +67,8 @@ class ExpandedSITSignals (implicit p: Parameters) extends BoomBundle()(p)
   val hit = Bool()
   val miss = Bool()
   val sit_ptr = UInt(log2Ceil(SIT_SIZE).W)
-  val addr = UInt(log2Ceil(coreMaxAddrBits).W)
+  val pc = UInt(coreMaxAddrBits.W)
+  val addr = UInt(coreMaxAddrBits.W)
 }
 
 class StreamPrefetcher (implicit p: Parameters) extends BoomModule()(p)
@@ -77,6 +84,7 @@ class StreamPrefetcher (implicit p: Parameters) extends BoomModule()(p)
     val s2_miss = Input(Bool())
   })
 
+  ////////////////////// s1
   private val mPC = RegInit(0.U(Addrbits.W))
 
   val data_array = SyncReadMem(SIT_SIZE, new SITEntry())
@@ -87,36 +95,69 @@ class StreamPrefetcher (implicit p: Parameters) extends BoomModule()(p)
   mPCEntryPorts.foreach{e => e.r_addr := io.df.bits.pc}
 
   val s1_hit_wire = io.df.valid && mPCEntryPorts.map(_.eq).reduce(_|_) // any match
+
+  dprintf(D_T2, s1_hit_wire, "[%d] access hit in mPCEntries with pc 0x%x, addr 0x%x\n",
+    GTimer(), io.df.bits.pc, io.df.bits.addr)
+
   val s1_hit_ptr_w = OHToUInt(mPCEntryPorts.map(_.eq))
   val s1_hit_ptr = RegNext(s1_hit_ptr_w)
   val s1_miss_wire = io.df.valid && !s1_hit_wire
 
   val s1_info = Reg(Valid(new ExpandedSITSignals()))
 
-  s1_info.valid := io.df.valid
+  s1_info.valid := io.df.valid && io.isInLoop
   s1_info.bits.hit := s1_hit_wire
   s1_info.bits.miss := s1_miss_wire
   s1_info.bits.addr := io.df.bits.addr
+  s1_info.bits.pc := io.df.bits.pc
+
+  //              |     s1      |                 s2                |
+  val s1_kill_s2 = s1_miss_wire && s1_info.valid && s1_info.bits.miss
+
+  dprintf(D_T2, io.df.valid && io.isInLoop,
+    "[%d] s1_miss wire: %d, s1_hit wire: %d, s1_pc wire: 0x%x\n",
+    GTimer(), s1_miss_wire, s1_hit_wire, io.df.bits.pc)
+
+  dprintf(D_T2, s1_info.valid,
+    "[%d] s1_miss reg: %d, s1_hit reg: %d, s1_pc reg: 0x%x\n",
+    GTimer(), s1_info.bits.miss, s1_info.bits.hit, s1_info.bits.pc)
+
+
+  dprintf(D_T2, s1_info.valid, "found valid memory access inside loop\n")
+  dprintf(D_T2, s1_info.valid, "[%d] valid mem access in loop: pc 0x%x, addr 0x%x\n",
+    GTimer(), s1_info.bits.pc, s1_info.bits.addr)
+
+  mPCEntryPorts.foreach{
+    e => dprintf(D_T2, s1_info.valid, "cell: 0x%x\n", e.cell)
+  }
 
   val s1_read_sit_entry = Wire(new SITEntry())
   s1_read_sit_entry := data_array.read(s1_hit_ptr_w, s1_hit_wire)
 
-  // s2
+  ////////////////////// s2
   val (sit_alloc_ptr, sit_ptr_wrap) = Counter(s1_info.bits.miss, SIT_SIZE)
 
   val sit_w_ptr_oh = UIntToOH(sit_alloc_ptr)
 
-  mPCEntryPorts.zipWithIndex.foreach{case(e, i) => e.write := s1_info.bits.miss && sit_w_ptr_oh(i)}
+  mPCEntryPorts.zipWithIndex.foreach{case(e, i) =>
+    e.write := !s1_kill_s2 && s1_info.valid && s1_info.bits.miss && sit_w_ptr_oh(i)}
+  when (s1_info.valid && s1_info.bits.miss) {
+    dprintf(D_T2, "[%d] w_ptr: %d\n", GTimer(), sit_alloc_ptr)
+  }
 
-  mPCEntryPorts.foreach{e => e.w_addr := s1_info.bits.addr}
+  mPCEntryPorts.foreach{e => e.w_addr := s1_info.bits.pc}
 
   val s2_info_w = WireInit(s1_info)
+  when (s1_kill_s2) {
+    s2_info_w.valid := false.B
+  }
   s2_info_w.bits.sit_ptr := Mux(s1_info.bits.miss, sit_alloc_ptr, s1_hit_ptr)
+
   val s2_info = RegNext(s2_info_w)
 
   val s2_read_sit_entry = RegNext(s1_read_sit_entry)
 
-  // s3
+  ////////////////////// s3
   val s3_wb_entry_w = Wire(new SITEntry())
   s3_wb_entry_w.state := TS_UNK
   s3_wb_entry_w.lastAddr := s2_info.bits.addr
@@ -183,6 +224,10 @@ class LoopPred (implicit p: Parameters) extends BoomModule()(p)
 
   val inLoop = RegInit(false.B)
 
+  io.loop_info.inLoop := inLoop
+  io.loop_info.branchAddr := loopInstPC
+  io.loop_info.targetAddr := loopTargetPC
+
   val loopCount = SaturatingCounter(LoopCounterMax)
   val nlpct = Module(new RoundRobinCAM(UInt(Addrbits.W), NLPCTSize))
 
@@ -191,7 +236,6 @@ class LoopPred (implicit p: Parameters) extends BoomModule()(p)
   private val target = io.cf.bits.target_addr
 
   nlpct.io.search_data.valid := io.cf.valid
-  dprintf(D_LoopPred, io.cf.valid, "LoopPred: received valid branch!\n")
   nlpct.io.search_data.bits := pc
 
   nlpct.io.insert_data.valid := false.B
@@ -206,6 +250,7 @@ class LoopPred (implicit p: Parameters) extends BoomModule()(p)
     when (io.cf.bits.inst_addr === loopInstPC) {
       loopCount.inc()
       inLoop := true.B
+      dprintf(D_LoopPred, "LoopPred: loop found!\n")
 
     }.otherwise{
       when (!inLoop || (pc =/= loopInstPC && target =/= loopTargetPC &&

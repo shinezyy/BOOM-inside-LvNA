@@ -108,7 +108,7 @@ class TPCPrefetcher(implicit p: Parameters) extends BoomModule()(p)
 
   when (T2.io.pred.valid) {
     when (T2.io.pred.bits.confidence > ConfidenceThreshold.U) {
-      dprintf(DEBUG_PREF_T2, "Sending prefetching reqs\n")
+      dprintf(D_T2, "Sending prefetching reqs\n")
       io.l1d.req.valid := true.B
       io.l1d.req.bits.addr := T2.io.pred.bits.addr
     }.otherwise {
