@@ -1,11 +1,10 @@
 package boom.lsu.pref
 
-import boom.common.{BoomBundle, BoomModule}
+import boom.common._
 import boom.common.util.{RoundRobinCAM, SaturatingCounter}
 import chisel3._
 import chisel3.util._
 import freechips.rocketchip.config.Parameters
-import freechips.rocketchip.rocket.constants._
 
 trait T2StateConstants {
   val TS_SZ   = 3
@@ -72,9 +71,9 @@ class StreamPrefetcher (implicit p: Parameters) extends BoomModule()(p)
 {
   val io = IO(new Bundle() {
     val isInLoop = Input(Bool())
-    val pred = new Valid(new CommonSubPrefetcherOut())
-    val cf = Flipped(new Valid(new ControlFlowInfo()))
-    val df = Flipped(new Valid(new DataflowInfo()))
+    val pred = Valid(new CommonSubPrefetcherOut())
+    val cf = Flipped(Valid(new ControlFlowInfo()))
+    val df = Flipped(Valid(new DataflowInfo()))
     val s2_miss = Input(Bool())
   })
 
@@ -92,7 +91,7 @@ class StreamPrefetcher (implicit p: Parameters) extends BoomModule()(p)
   val s1_hit_ptr = RegNext(s1_hit_ptr_w)
   val s1_miss_wire = io.df.valid && !s1_hit_wire
 
-  val s1_info = Reg(new Valid(new ExpandedSITSignals()))
+  val s1_info = Reg(Valid(new ExpandedSITSignals()))
 
   s1_info.valid := io.df.valid
   s1_info.bits.hit := s1_hit_wire
@@ -174,7 +173,7 @@ class LoopPred (implicit p: Parameters) extends BoomModule()(p)
   with PrefetcherConstants
 {
   val io = IO(new Bundle() {
-    val cf = Flipped(new Valid(new ControlFlowInfo()))
+    val cf = Flipped(Valid(new ControlFlowInfo()))
     val loop_info = Output(new LoopInfo())
   })
 
@@ -192,6 +191,7 @@ class LoopPred (implicit p: Parameters) extends BoomModule()(p)
   private val target = io.cf.bits.target_addr
 
   nlpct.io.search_data.valid := io.cf.valid
+  dprintf(D_LoopPred, io.cf.valid, "LoopPred: received valid branch!\n")
   nlpct.io.search_data.bits := pc
 
   nlpct.io.insert_data.valid := false.B
@@ -199,6 +199,8 @@ class LoopPred (implicit p: Parameters) extends BoomModule()(p)
 
   private val is_backward = pc > target
   private val found_in_nlpct = nlpct.io.found
+
+  dprintf(D_LoopPred, is_backward, "LoopPred: received backward branch!\n")
 
   when (is_backward && !found_in_nlpct) {
     when (io.cf.bits.inst_addr === loopInstPC) {

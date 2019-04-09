@@ -251,6 +251,7 @@ class BoomTileModuleImp(outer: BoomTile) extends BaseTileModuleImp(outer)
 
   // NOTE: always put it last to indicate lowest priority
   if (p(UsePrefetcher)) {
+    println("Adding prefetcher")
     val prefetcher = Module(new TPCPrefetcher()(outer.p))
     dcachePorts += prefetcher.io.l1d
     prefetcher.io.l2 := DontCare

@@ -1,7 +1,6 @@
 package boom.lsu.pref
 
-import boom.common.{BoomBundle, BoomModule}
-import boom.lsu.{HasBoomHellaCache, HasBoomHellaCacheModule}
+import boom.common._
 import chisel3._
 import chisel3.util.{DecoupledIO, Valid}
 import freechips.rocketchip.config.{Config, Field, Parameters}
@@ -73,8 +72,8 @@ class TPCPrefetcher(implicit p: Parameters) extends BoomModule()(p)
   with ScalarOpConstants
 {
   val io = IO(new Bundle() {
-    val cf = Flipped(new Valid(new ControlFlowInfo()))
-    val df = Flipped(new Valid(new DataflowInfo()))
+    val cf = Flipped(Valid(new ControlFlowInfo()))
+    val df = Flipped(Valid(new DataflowInfo()))
     val l1d = new HellaCacheIO()
     val l2 = new HellaCacheIO()
   })
@@ -109,6 +108,7 @@ class TPCPrefetcher(implicit p: Parameters) extends BoomModule()(p)
 
   when (T2.io.pred.valid) {
     when (T2.io.pred.bits.confidence > ConfidenceThreshold.U) {
+      dprintf(DEBUG_PREF_T2, "Sending prefetching reqs\n")
       io.l1d.req.valid := true.B
       io.l1d.req.bits.addr := T2.io.pred.bits.addr
     }.otherwise {

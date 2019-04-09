@@ -58,7 +58,11 @@ trait BOOMDebugConstants
    val DEBUG_ETHER1       :Boolean  = false && DEBUG_ALL
    val DEBUG_DTM          :Boolean  = false && DEBUG_ALL
    val DEBUG_TRACK_INT    :Boolean  = false && DEBUG_ALL
+   val DEBUG_RDTIME       :Boolean  = false && DEBUG_ALL
+   val DEBUG_PREF_T2      :Boolean  = true && DEBUG_ALL
+   val D_LoopPred         :Boolean  = true && DEBUG_ALL
 
+   val AbortPC = BigInt(0xff800bda22L)
 //   if (O3PIPEVIEW_PRINTF) require (!DEBUG_PRINTF && !COMMIT_LOG_PRINTF)
 }
 

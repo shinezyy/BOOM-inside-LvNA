@@ -72,8 +72,8 @@ trait HasBoomCoreIO extends freechips.rocketchip.tile.HasTileParameters
          val ila = new BoomCSRILABundle()
          val fpga_trace = new FPGATraceBaseBundle(retireWidth)
 
-         val cf = new Valid(new ControlFlowInfo())
-         val df = new Valid(new DataflowInfo())
+         val cf = Valid(new ControlFlowInfo())
+         val df = Valid(new DataflowInfo())
    }
 }
 
