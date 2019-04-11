@@ -123,7 +123,6 @@ class StreamPrefetcher (implicit p: Parameters) extends BoomModule()(p)
     GTimer(), s1_info.bits.miss, s1_info.bits.hit, s1_info.bits.pc)
 
 
-  dprintf(D_T2, s1_info.valid, "found valid memory access inside loop\n")
   dprintf(D_T2, s1_info.valid, "[%d] valid mem access in loop: pc 0x%x, addr 0x%x\n",
     GTimer(), s1_info.bits.pc, s1_info.bits.addr)
 
@@ -160,35 +159,88 @@ class StreamPrefetcher (implicit p: Parameters) extends BoomModule()(p)
   ////////////////////// s3
   val s3_wb_entry_w = Wire(new SITEntry())
   s3_wb_entry_w.state := TS_UNK
-  s3_wb_entry_w.lastAddr := s2_info.bits.addr
   s3_wb_entry_w.lastPrefAddr := 0.U
-  s3_wb_entry_w.delta := 0.U
-  s3_wb_entry_w.counter := 1.U
+  s3_wb_entry_w.counter := 1.U(StrideCounterWidth.U)
+  s3_wb_entry_w.lastAddr := s2_info.bits.addr
 
-  val new_delta = s2_info.bits.addr - s2_read_sit_entry.lastAddr
+  val new_delta = Wire(UInt(AddrDeltaWidth.W))
+  new_delta := s2_info.bits.addr - s2_read_sit_entry.lastAddr
+
+  s3_wb_entry_w.delta := new_delta
 
   when (s2_info.valid && s2_info.bits.hit) {
     // keep most states by default
     s3_wb_entry_w := s2_read_sit_entry
+    s3_wb_entry_w.delta := new_delta
+    s3_wb_entry_w.lastAddr := s2_info.bits.addr
 
-    when(s2_read_sit_entry.state === TS_UNK && io.s2_miss) {
-      s3_wb_entry_w.state := TS_OB
-    }
 
-    when(new_delta === s2_read_sit_entry.delta) {
-      when(s2_read_sit_entry.state === TS_OB || s2_read_sit_entry.state === TS_N) {
-        s3_wb_entry_w.state := TS_STRD
-        s3_wb_entry_w.counter := 1.U
-      }.elsewhen (s2_read_sit_entry.state === TS_STRD &&
-        s2_read_sit_entry.counter =/= ((1 << StrideCounterWidth) - 1).U(StrideCounterWidth.W)) { // saturating counter
-        s3_wb_entry_w.counter := s2_read_sit_entry.counter + 1.U
+    when(io.s2_miss) {
+      dprintf(D_T2_1, s2_info.valid && s2_info.bits.hit,
+        "[%d] s2 processing inst[0x%x] addr: 0x%x!\n",
+        GTimer(), s2_info.bits.pc, s2_info.bits.addr)
+
+      dprintf(D_T2_1, s2_info.valid && s2_info.bits.hit,
+        "[%d] state: %d, s2_miss: %d\n",
+        GTimer(), s2_read_sit_entry.state, io.s2_miss)
+
+      when(s2_read_sit_entry.state === TS_UNK) {
+        dprintf(D_T2_1, "[%d] primary miss triggered by inst[0x%x] addr[0x%x]," +
+          "set to OB\n",
+          GTimer(), s2_info.bits.pc, s2_info.bits.addr)
+        s3_wb_entry_w.state := TS_OB
+      }
+
+      dprintf(D_T2_1, "[%d] access by inst[0x%x] addr[0x%x], delta old: %d, new:%d\n",
+        GTimer(), s2_info.bits.pc, s2_info.bits.addr, s2_read_sit_entry.delta, new_delta)
+
+      val changed = WireInit(false.B)
+
+      when(new_delta === s2_read_sit_entry.delta) {
+        changed := true.B
+        dprintf(D_T2_1, "[%d] sit ptr: %d\n", GTimer(), s2_info.bits.sit_ptr)
+
+        when(s2_read_sit_entry.state === TS_OB && new_delta =/= 0.U) {
+          dprintf(D_T2_1, "[%d] set to striding\n", GTimer())
+          s3_wb_entry_w.state := TS_STRD
+          s3_wb_entry_w.counter := 1.U(StrideCounterWidth.W)
+
+        }.elsewhen(s2_read_sit_entry.state === TS_STRD &&
+          s2_read_sit_entry.counter =/= ((1 << StrideCounterWidth) - 1).U(StrideCounterWidth.W)) { // saturating counter
+          dprintf(D_T2_1, "[%d] inc striding\n", GTimer())
+          s3_wb_entry_w.state := TS_STRD
+          s3_wb_entry_w.counter := (s2_read_sit_entry.counter + 1.U)(StrideCounterWidth-1, 0)
+
+          for (i <- 0 until SIT_SIZE) {
+            dprintf(D_T2_1, "SIT[%d]: 0x%x\n",
+              i.U, data_array.read(i.U).lastAddr)
+          }
+        }
+      }.elsewhen(s2_read_sit_entry.state === TS_STRD) { // not equal
+        changed := true.B
+        s2_read_sit_entry.state := TS_OB
+
+        dprintf(D_T2_1, "[%d] Set striding back to OB\n", GTimer())
+        dprintf(D_T2_1, "[%d] sit ptr: %d\n", GTimer(), s2_info.bits.sit_ptr)
+      }
+      when (changed) {
+        for (i <- 0 until SIT_SIZE) {
+          val e = data_array.read(i.U)
+          dprintf(D_T2_1, "SIT[%d], pc: 0x%x, addr: 0x%x, state: %d, delta: %d\n",
+            i.U, mPCEntryPorts(i).cell, e.lastAddr, e.state, e.delta)
+        }
       }
     }
   }
-  val pref_addr = WireInit(0.U(Addrbits.W))
+  val pref_addr = s2_info.bits.addr + s3_wb_entry_w.delta
+//  val pref_addr = WireInit(0.U(Addrbits.W))
+
   io.pred.valid := false.B
-  when (s2_read_sit_entry.state === TS_STRD &&
+  when (s2_info.valid && s2_info.bits.hit && io.s2_miss &&
+    s2_read_sit_entry.state === TS_STRD &&
     s3_wb_entry_w.counter > StrideCounterThreshold.U) {
+    dprintf(D_T2_1, "[%d] Stride prefetch issued to fetch pc[0x%x] addr[0x%x]\n",
+      GTimer(), s2_info.bits.pc, pref_addr)
     io.pred.valid := true.B
     io.pred.bits.addr := pref_addr
     io.pred.bits.confidence := s3_wb_entry_w.counter
@@ -196,8 +248,18 @@ class StreamPrefetcher (implicit p: Parameters) extends BoomModule()(p)
     s3_wb_entry_w.lastPrefAddr := pref_addr
   }
 
-  data_array.write(s2_info.bits.sit_ptr, s3_wb_entry_w)
+  val s3_wb_next = RegNext(s3_wb_entry_w)
+  val s2_sit_ptr = RegNext(s2_info.bits.sit_ptr)
 
+  val last_cycle_wb = RegInit(false.B)
+  when (s2_info.valid && s2_info.bits.hit && io.s2_miss) {
+    data_array.write(s2_info.bits.sit_ptr, s3_wb_entry_w)
+    last_cycle_wb := true.B
+  }.otherwise {
+    last_cycle_wb := false.B
+  }
+  dprintf(D_T2_1, last_cycle_wb, "[%d] last wb ptr: %d, wb addr: 0x%x, state: %d\n",
+    GTimer(), s2_sit_ptr, s3_wb_next.lastAddr, s3_wb_next.state)
 }
 
 class LoopInfo(implicit p: Parameters) extends BoomBundle()(p)

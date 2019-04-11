@@ -20,8 +20,8 @@ trait PrefetcherConstants {
   val ConfidenceBits = 6
   val ConfidenceThreshold = 32
 
-  val AddrDeltaWidth = 8
-  val Addrbits = 48
+  val AddrDeltaWidth = 16
+  val Addrbits = 40
 
   val LoopCounterMax = 16
   val MinLoopSize = 4
