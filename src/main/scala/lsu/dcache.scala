@@ -14,6 +14,9 @@ import freechips.rocketchip.diplomacy._
 import freechips.rocketchip.tilelink._
 import freechips.rocketchip.util._
 import freechips.rocketchip.rocket._
+import freechips.rocketchip.util.GTimer
+
+import boom.common._
 
 /**
  * Top level class wrapping a non-blocking dcache.
@@ -49,6 +52,16 @@ class BoomNonBlockingDCacheModule(outer: BoomNonBlockingDCache) extends HellaCac
   val s1_req = Reg(io.cpu.req.bits)
   val s1_valid_masked = s1_valid && !io.cpu.s1_kill
   val s1_replay = Reg(init=Bool(false))
+
+  when (s1_req.addr === io.cpu.req.bits.addr && s1_valid && io.cpu.req.fire()) {
+    dprintf(D_T2_2, "same addr in s1 and s2: 0x%x, s1_kill: %d, s1_replay: %d\n",
+      s1_req.addr, io.cpu.s1_kill, s1_replay)
+  }
+  when (s1_valid && isPrefetch(s1_req.cmd)) {
+    dprintf(D_T2_2, "[%d] prefetch to addr 0x%x accepted last cycle\n",
+      GTimer(), s1_req.addr)
+  }
+
   val s1_clk_en = Reg(Bool())
   val s1_sfence = s1_req.cmd === M_SFENCE
 
@@ -234,6 +247,12 @@ class BoomNonBlockingDCacheModule(outer: BoomNonBlockingDCache) extends HellaCac
   val s2_repl_meta = Mux1H(s2_replaced_way_en,
     wayMap((w: Int) => RegEnable(meta.io.resp(w), s1_clk_en && s1_replaced_way_en(w))).toSeq)
 
+  val kick_idx = s2_req.addr.extract(blockOffBits + idxBits - 1, blockOffBits)
+  val kick_tag = s2_repl_meta.tag
+  val kick_addr = Cat(kick_tag, kick_idx, 0.U(blockOffBits.W))
+
+  dprintf(D_T2_2, mshrs.io.req.fire(), "[%d] Kicking 0x%x\n",
+    GTimer(), kick_addr)
   // miss handling
   mshrs.io.req.valid := s2_valid_masked && !s2_hit && (isPrefetch(s2_req.cmd) ||
                         isRead(s2_req.cmd) || isWrite(s2_req.cmd))
@@ -244,6 +263,11 @@ class BoomNonBlockingDCacheModule(outer: BoomNonBlockingDCache) extends HellaCac
   mshrs.io.req.bits.data := s2_req.data
   when (mshrs.io.req.fire()) { replacer.miss }
   tl_out.a <> mshrs.io.mem_acquire
+
+  when (tl_out.a.fire()) {
+    dprintf(D_T2_2, "[%d] Refilling addr 0x%x\n",
+      GTimer(), mshrs.io.mem_acquire.bits.address)
+  }
 
   // replays
   readArb.io.in(1).valid := mshrs.io.replay.valid

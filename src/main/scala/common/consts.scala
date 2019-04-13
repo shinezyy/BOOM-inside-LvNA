@@ -26,7 +26,7 @@ import freechips.rocketchip.rocket.RVCExpander
  */
 trait BOOMDebugConstants
 {
-   val DEBUG_ALL           = false
+   val DEBUG_ALL           = true
    val DEBUG_PRINTF        = false // use the Chisel printf functionality
    val COMMIT_LOG_PRINTF   = false // dump commit state, for comparision against ISA sim
    val O3PIPEVIEW_PRINTF   = false // dump trace for O3PipeView from gem5
@@ -59,8 +59,10 @@ trait BOOMDebugConstants
    val DEBUG_DTM          :Boolean  = false && DEBUG_ALL
    val DEBUG_TRACK_INT    :Boolean  = false && DEBUG_ALL
    val DEBUG_RDTIME       :Boolean  = false && DEBUG_ALL
-   val D_T2               :Boolean  = true && DEBUG_ALL
+   val D_T2               :Boolean  = false && DEBUG_ALL
    val D_LoopPred         :Boolean  = false && DEBUG_ALL
+   val D_T2_1             :Boolean  = DEBUG_ALL && false
+   val D_T2_2             :Boolean  = DEBUG_ALL && true
 
    val AbortPC = BigInt(0xff800bda22L)
 //   if (O3PIPEVIEW_PRINTF) require (!DEBUG_PRINTF && !COMMIT_LOG_PRINTF)

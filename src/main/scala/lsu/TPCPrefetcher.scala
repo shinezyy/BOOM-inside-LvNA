@@ -2,11 +2,12 @@ package boom.lsu.pref
 
 import boom.common._
 import chisel3._
-import chisel3.util.{DecoupledIO, Valid}
+import chisel3.util.{DecoupledIO, Queue, Valid}
 import freechips.rocketchip.config.{Config, Field, Parameters}
 import freechips.rocketchip.rocket.HellaCacheIO
 import freechips.rocketchip.rocket.constants._
 import freechips.rocketchip.tile.{BaseTile, HasTileParameters}
+import freechips.rocketchip.util.GTimer
 
 case object UsePrefetcher extends Field[Boolean](false)
 
@@ -105,15 +106,80 @@ class TPCPrefetcher(implicit p: Parameters) extends BoomModule()(p)
   T2.io.s2_miss := io.l1d.s2_primary_miss
   T2.io.isInLoop := loopPred.io.loop_info.inLoop
 
+  val T2_wrapper = Module(new PrefReqMaintainer())
+  T2_wrapper.io.pred_in := T2.io.pred
+  T2_wrapper.io.pred_out.ready := io.l1d.req.ready
+  T2_wrapper.io.s2_rejected := io.l1d.s2_nack
 
-  when (T2.io.pred.valid) {
-    when (T2.io.pred.bits.confidence > ConfidenceThreshold.U) {
-      dprintf(D_T2, "Sending prefetching reqs\n")
-      io.l1d.req.valid := true.B
-      io.l1d.req.bits.addr := T2.io.pred.bits.addr
-    }.otherwise {
-      io.l2.req.valid := true.B
-      io.l2.req.bits.addr := T2.io.pred.bits.addr
+  when (T2_wrapper.io.pred_out.valid) {
+    io.l1d.req.valid := true.B
+    io.l1d.req.bits.addr := T2_wrapper.io.pred_out.bits
+  }
+}
+
+class PrefReqMaintainer(implicit p:Parameters) extends BoomModule()(p)
+  with PrefetcherConstants
+{
+  val io = IO(new Bundle(){
+    val pred_in = Flipped(Valid(new CommonSubPrefetcherOut()))
+    val pred_out = DecoupledIO(UInt(Addrbits.W))
+    val s2_rejected = Input(Bool())
+  })
+
+  class InternalReq (implicit p: Parameters) extends BoomBundle ()(p){
+    val persistent_req = Bool()
+    val temporality = UInt(TemporalityBits.W)
+    val addr = UInt(Addrbits.W)
+  }
+
+  val req_fired_two_cycle_ago = RegNext(RegNext(io.pred_out.fire()))
+
+  val reqQueue = Module(new Queue(new InternalReq(), entries = 4))
+  reqQueue.io.deq.ready := req_fired_two_cycle_ago && !io.s2_rejected
+
+  when(req_fired_two_cycle_ago ) {
+    when (!io.s2_rejected) {
+      dprintf(D_T2_2,
+        "[%d] deq because of pref issued to addr 0x%x\n",
+        GTimer(), reqQueue.io.deq.bits.addr)
+    }.otherwise{
+      dprintf(D_T2_2,
+        "[%d] req 2 cycles ago to 0x%x rejected\n",
+        GTimer(), reqQueue.io.deq.bits.addr)
+    }
+  }
+
+  io.pred_out.valid := false.B
+  when (reqQueue.io.deq.valid) {
+    io.pred_out.valid := true.B
+    io.pred_out.bits := reqQueue.io.deq.bits.addr
+    dprintf(D_T2_2, "[%d] try to send req to addr 0x%x\n",
+      GTimer(), reqQueue.io.deq.bits.addr)
+  }
+
+  reqQueue.io.enq.valid := false.B
+  reqQueue.io.enq.bits := DontCare
+  // new req override old one
+  when (io.pred_in.valid) {
+    reqQueue.io.enq.valid := true.B
+    dprintf(D_T2_2, "[%d] received req from sub pref, ", GTimer())
+
+    when (io.pred_in.bits.temporality === 0.U) {
+      dprintf(D_T2_2, "persistent req, ")
+      reqQueue.io.enq.bits.persistent_req := true.B
+
+    }.otherwise{
+      dprintf(D_T2_2, "temporal req, ")
+      reqQueue.io.enq.bits.persistent_req := false.B
+      reqQueue.io.enq.bits.temporality := io.pred_in.bits.temporality
+    }
+    dprintf(D_T2_2, "to address 0x%x\n", io.pred_in.bits.addr)
+    reqQueue.io.enq.bits.addr := io.pred_in.bits.addr
+
+    when (reqQueue.io.enq.ready) {
+      dprintf(D_T2_2, "enqueued!\n")
+    }.otherwise{
+      dprintf(D_T2_2, "dropped because of full!\n")
     }
   }
 }

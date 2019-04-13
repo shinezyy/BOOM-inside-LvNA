@@ -277,6 +277,14 @@ class BoomCore(implicit p: Parameters, edge: freechips.rocketchip.tilelink.TLEdg
    val icache_blocked = !(io.ifu.fetchpacket.valid || RegNext(io.ifu.fetchpacket.valid))
    csr.io.counters foreach { c => c.inc := RegNext(perfEvents.evaluate(c.eventSel)) }
 
+   val numInsts = RegInit(0.U(32.W))
+   numInsts := numInsts + PopCount(Range(0, COMMIT_WIDTH).map{ w =>
+      rob.io.commit.valids(w)})
+
+   when ((GTimer() & 0xfff.U(12.W)).asUInt === 0.U) {
+     dprintf(D_T2_2, "[%d] numInsts: %d\n", GTimer(), numInsts)
+   }
+
    // Old BOOM Core HPE's
    //// User-level instruction count.
    //csr.io.events(2) := PopCount((Range(0,COMMIT_WIDTH)).map{w =>
