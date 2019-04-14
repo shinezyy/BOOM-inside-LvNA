@@ -63,6 +63,8 @@ trait BOOMDebugConstants
    val D_LoopPred         :Boolean  = false && DEBUG_ALL
    val D_T2_1             :Boolean  = DEBUG_ALL && false
    val D_T2_2             :Boolean  = DEBUG_ALL && true
+   val D_T2_3             :Boolean  = DEBUG_ALL && true
+   val D_PERF             :Boolean  = DEBUG_ALL && true
 
    val AbortPC = BigInt(0xff800bda22L)
 //   if (O3PIPEVIEW_PRINTF) require (!DEBUG_PRINTF && !COMMIT_LOG_PRINTF)
