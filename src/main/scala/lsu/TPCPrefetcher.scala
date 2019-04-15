@@ -60,11 +60,13 @@ class PrefetcherCacheSide(implicit p: Parameters) extends BoomBundle()(p)
 }
 
 class CommonSubPrefetcherOut(implicit p: Parameters) extends BoomBundle()(p)
+  with MemoryOpConstants
   with PrefetcherConstants
 {
   val addr = UInt(Addrbits.W)
   val temporality = UInt(TemporalityBits.W)
   val confidence = UInt(ConfidenceBits.W)
+  val cmd  = Bits(M_SZ.W)
 }
 
 class TPCPrefetcher(implicit p: Parameters) extends BoomModule()(p)
@@ -87,7 +89,7 @@ class TPCPrefetcher(implicit p: Parameters) extends BoomModule()(p)
     dc_port.req.bits.typ := MT_W  // usually prefetch a word?
     dc_port.req.bits.addr := 0.U  // set by sub prefetcher
     dc_port.req.bits.tag := 0.U  // prefetch ignore tag (tag is used for keep resp order?)
-    dc_port.req.bits.cmd := M_PFR  // prefetcher read
+//    dc_port.req.bits.cmd := M_PFR  // prefetcher read
     dc_port.req.bits.phys := false.B  // currently only vaddr is used
 
     dc_port.s1_data.data := 0.U   // prefetcher writes nothing
@@ -113,24 +115,30 @@ class TPCPrefetcher(implicit p: Parameters) extends BoomModule()(p)
 
   when (T2_wrapper.io.pred_out.valid) {
     io.l1d.req.valid := true.B
-    io.l1d.req.bits.addr := T2_wrapper.io.pred_out.bits
+    io.l1d.req.bits.addr := T2_wrapper.io.pred_out.bits.addr
+    io.l1d.req.bits.cmd := T2_wrapper.io.pred_out.bits.cmd
   }
 }
 
 class PrefReqMaintainer(implicit p:Parameters) extends BoomModule()(p)
   with PrefetcherConstants
+  with MemoryOpConstants
 {
-  val io = IO(new Bundle(){
-    val pred_in = Flipped(Valid(new CommonSubPrefetcherOut()))
-    val pred_out = DecoupledIO(UInt(Addrbits.W))
-    val s2_rejected = Input(Bool())
-  })
 
-  class InternalReq (implicit p: Parameters) extends BoomBundle ()(p){
+  class InternalReq (implicit p: Parameters) extends BoomBundle ()(p)
+    with MemoryOpConstants
+  {
     val persistent_req = Bool()
     val temporality = UInt(TemporalityBits.W)
     val addr = UInt(Addrbits.W)
+    val cmd = UInt(M_SZ.W)
   }
+  val io = IO(new Bundle(){
+    val pred_in = Flipped(Valid(new CommonSubPrefetcherOut()))
+    val pred_out = DecoupledIO(new InternalReq())
+    val s2_rejected = Input(Bool())
+  })
+
 
   val req_fired_two_cycle_ago = RegNext(RegNext(io.pred_out.fire()))
 
@@ -152,7 +160,7 @@ class PrefReqMaintainer(implicit p:Parameters) extends BoomModule()(p)
   io.pred_out.valid := false.B
   when (reqQueue.io.deq.valid) {
     io.pred_out.valid := true.B
-    io.pred_out.bits := reqQueue.io.deq.bits.addr
+    io.pred_out.bits := reqQueue.io.deq.bits
     dprintf(D_T2_2, "[%d] try to send req to addr 0x%x\n",
       GTimer(), reqQueue.io.deq.bits.addr)
   }
@@ -173,8 +181,18 @@ class PrefReqMaintainer(implicit p:Parameters) extends BoomModule()(p)
       reqQueue.io.enq.bits.persistent_req := false.B
       reqQueue.io.enq.bits.temporality := io.pred_in.bits.temporality
     }
+
+    when (io.pred_in.bits.cmd === M_PFR) {
+      dprintf(D_T2_3, "M_PFR, ")
+    }.elsewhen(io.pred_in.bits.cmd === M_PFW) {
+      dprintf(D_T2_3, "M_PFW, ")
+    }.otherwise {
+      dprintf(D_T2_3, "Unknown cmd!! ")
+    }
+
     dprintf(D_T2_2, "to address 0x%x\n", io.pred_in.bits.addr)
     reqQueue.io.enq.bits.addr := io.pred_in.bits.addr
+    reqQueue.io.enq.bits.cmd := io.pred_in.bits.cmd
 
     when (reqQueue.io.enq.ready) {
       dprintf(D_T2_2, "enqueued!\n")

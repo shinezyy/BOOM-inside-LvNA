@@ -184,6 +184,13 @@ class BoomNonBlockingDCacheModule(outer: BoomNonBlockingDCache) extends HellaCac
   val (s2_has_permission, _, s2_new_hit_state) = s2_hit_state.onAccess(s2_req.cmd)
   val s2_hit = s2_tag_match && s2_has_permission && s2_hit_state === s2_new_hit_state
 
+  when (s2_valid_masked && !s2_hit) {
+    dprintf(D_T2_3,
+      "[%d] addr 0x%x miss! match: %d, permission: %d, hit state: %d\n",
+      GTimer(), s2_req.addr,
+      s2_tag_match, s2_has_permission, s2_hit_state === s2_new_hit_state)
+  }
+
   // load-reserved/store-conditional
   val lrsc_count = Reg(init=UInt(0))
   val lrsc_valid = lrsc_count > lrscBackoff
@@ -278,6 +285,18 @@ class BoomNonBlockingDCacheModule(outer: BoomNonBlockingDCache) extends HellaCac
   metaReadArb.io.in(1) <> mshrs.io.meta_read
   metaWriteArb.io.in(0) <> mshrs.io.meta_write
 
+  when (metaWriteArb.io.in(0).fire()) {
+    dprintf(D_T2_3, "[%d] writing 0x%x to tag with idx 0x%x\n",
+      GTimer(), mshrs.io.meta_write.bits.data.tag << untagBits,
+      mshrs.io.meta_write.bits.idx << blockOffBits)
+  }
+
+  when (writeArb.io.in(1).fire()) {
+    dprintf(D_T2_3, "[%d] writing to index + off 0x%x with data 0x%x w_mask 0x%x\n",
+      GTimer(), mshrs.io.refill.addr, writeArb.io.in(1).bits.data,
+      writeArb.io.in(1).bits.wmask)
+  }
+
   // probes and releases
   prober.io.req.valid := tl_out.b.valid && !lrsc_valid
   tl_out.b.ready := prober.io.req.ready && !lrsc_valid
@@ -302,6 +321,7 @@ class BoomNonBlockingDCacheModule(outer: BoomNonBlockingDCache) extends HellaCac
   writeArb.io.in(1).bits.way_en := mshrs.io.refill.way_en
   writeArb.io.in(1).bits.wmask := ~UInt(0, rowWords)
   writeArb.io.in(1).bits.data := tl_out.d.bits.data(encRowBits-1,0)
+  println(s"encRowbits = $encRowBits")
   data.io.read <> readArb.io.out
   readArb.io.out.ready := !tl_out.d.valid || tl_out.d.ready // insert bubble if refill gets blocked
   tl_out.e <> mshrs.io.mem_finish

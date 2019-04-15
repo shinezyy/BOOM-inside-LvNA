@@ -6,6 +6,7 @@ import chisel3._
 import chisel3.internal.naming.chiselName
 import chisel3.util._
 import freechips.rocketchip.config.Parameters
+import freechips.rocketchip.rocket.constants.MemoryOpConstants
 import freechips.rocketchip.tile.HasL1CacheParameters
 import freechips.rocketchip.util.GTimer
 
@@ -37,6 +38,7 @@ class SITEntry  // Stride identifier table
   val delta         = UInt(AddrDeltaWidth.W)
   val state         = UInt(TS_SZ.W)
   val counter       = UInt(StrideCounterWidth.W)
+  val ever_written  = Bool()
 }
 
 class MPCEntry (implicit p: Parameters) extends BoomModule()(p)
@@ -71,12 +73,14 @@ class ExpandedSITSignals (implicit p: Parameters) extends BoomBundle()(p)
   val sit_ptr = UInt(log2Ceil(SIT_SIZE).W)
   val pc = UInt(coreMaxAddrBits.W)
   val addr = UInt(coreMaxAddrBits.W)
+  val is_store = Bool()
 }
 
 class StreamPrefetcher (implicit p: Parameters) extends BoomModule ()(p)
   with T2Parameters
   with T2StateConstants
   with PrefetcherConstants
+  with MemoryOpConstants
 {
   val io = IO(new Bundle() {
     val isInLoop = Input(Bool())
@@ -115,6 +119,7 @@ class StreamPrefetcher (implicit p: Parameters) extends BoomModule ()(p)
   s1_info.bits.miss := s1_miss_wire
   s1_info.bits.addr := masked_addr
   s1_info.bits.pc := io.df.bits.pc
+  s1_info.bits.is_store := isWrite(io.df.bits.cmd)
 
   //  val s1_kill_s2 = s1_miss_wire && s1_info.valid && s1_info.bits.miss &&
   //    s1_info.bits.addr === masked_addr
@@ -173,6 +178,7 @@ class StreamPrefetcher (implicit p: Parameters) extends BoomModule ()(p)
   s3_wb_entry_w.state := TS_UNK
   s3_wb_entry_w.counter := 0.U(StrideCounterWidth.W)
   s3_wb_entry_w.delta := 0.U(AddrDeltaWidth.W)
+  s3_wb_entry_w.ever_written := s2_info.bits.is_store
 
   val new_delta = Wire(UInt(AddrDeltaWidth.W))
   new_delta := s2_info.bits.addr - s2_read_sit_entry.lastAddr
@@ -182,6 +188,7 @@ class StreamPrefetcher (implicit p: Parameters) extends BoomModule ()(p)
   val pref_addr = WireInit(0.U(Addrbits.W))
 
   when (s2_info.bits.hit) {
+    s3_wb_entry_w.ever_written := s2_read_sit_entry.ever_written || s2_info.bits.is_store
 
     dprintf(D_T2_3, "[%d] req pc0x%x addr[0x%x] state: %d\n",
       GTimer(), s1_info.bits.pc, s1_info.bits.addr, s2_read_sit_entry.state)
@@ -252,6 +259,7 @@ class StreamPrefetcher (implicit p: Parameters) extends BoomModule ()(p)
 
             io.pred.bits.confidence := s3_wb_entry_w.counter
             io.pred.bits.temporality := 0.U
+            io.pred.bits.cmd := Mux(s3_wb_entry_w.ever_written, M_PFW, M_PFR)
 
             dprintf(D_T2_3, "[%d] create prefetch to addr 0x%x\n", GTimer(), pref_addr)
           }
