@@ -281,8 +281,11 @@ class BoomCore(implicit p: Parameters, edge: freechips.rocketchip.tilelink.TLEdg
    numInsts := numInsts + PopCount(Range(0, COMMIT_WIDTH).map{ w =>
       rob.io.commit.valids(w)})
 
-   when ((GTimer() & 0xfff.U(12.W)).asUInt === 0.U) {
-     dprintf(D_T2_2, "[%d] numInsts: %d\n", GTimer(), numInsts)
+//   when ((GTimer() & 0xfff.U(12.W)).asUInt === 0.U) {
+//     dprintf(D_PERF, "[%d] numInsts: %d\n", GTimer(), numInsts)
+//   }
+   when ((numInsts & 0xfff.U(12.W)).asUInt === 0.U) {
+      dprintf(D_PERF, "[%d] numInsts: %d\n", GTimer(), numInsts)
    }
 
    // Old BOOM Core HPE's
