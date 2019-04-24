@@ -46,9 +46,9 @@ case class FtqParameters(
 class FTQBundle(implicit p: Parameters) extends BoomBundle()(p)
 {
    val fetch_pc = UInt(vaddrBitsExtended.W) // TODO compress out high-order bits
-   val history = UInt(GLOBAL_HISTORY_LENGTH.W)
+   val history = UInt(globalHistoryLength.W)
    val bim_info = new BimStorage
-   val bpd_info = UInt(BPD_INFO_SIZE.W)
+   val bpd_info = UInt(bpdInfoSize.W)
 }
 
 /**
@@ -135,6 +135,7 @@ class FetchTargetQueue(num_entries: Int)(implicit p: Parameters) extends BoomMod
    val commit_ptr = RegInit(0.asUInt(log2Ceil(num_entries).W))
 
    val ram = Mem(num_entries, new FTQBundle())
+   ram.suggestName("ftq_bundle_ram")
    val cfi_info = Reg(Vec(num_entries, new CfiMissInfo()))
 
    private def initCfiInfo(br_seen: Bool, cfi_idx: UInt): CfiMissInfo =

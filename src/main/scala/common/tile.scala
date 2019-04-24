@@ -8,11 +8,11 @@
 package boom.common
 
 import chisel3._
-
 import freechips.rocketchip.config._
 import freechips.rocketchip.subsystem._
 import freechips.rocketchip.devices.tilelink._
 import freechips.rocketchip.diplomacy._
+import freechips.rocketchip.diplomaticobjectmodel.model._
 import freechips.rocketchip.rocket._
 import freechips.rocketchip.tilelink._
 import freechips.rocketchip.interrupts._
@@ -20,12 +20,11 @@ import freechips.rocketchip.util._
 import freechips.rocketchip.tile._
 import boom.exu._
 import boom.ifu._
-import boom.lsu.{CanHaveBoomPTW, CanHaveBoomPTWModule, HasBoomHellaCache, HasBoomHellaCacheModule}
+import boom.lsu._
 import boom.lsu.pref.{TPCPrefetcher, UsePrefetcher}
 import freechips.rocketchip.debug.DebugCSRIntIO
 import ila.{BoomCSRILABundle, FPGATraceBaseBundle}
 import lvna.HasControlPlaneParameters
-
 
 /**
  * BOOM tile parameter class used in configurations
@@ -49,9 +48,9 @@ case class BoomTileParams(
     btb: Option[BTBParams] = Some(BTBParams()),
     dataScratchpadBytes: Int = 0,
     trace: Boolean = false,
-    hcfOnUncorrectable: Boolean = false,
     name: Option[String] = Some("tile"),
     hartId: Int = 0,
+    beuAddr: Option[BigInt] = None,
     blockerCtrlAddr: Option[BigInt] = None,
     boundaryBuffers: Boolean = false // if synthesized with hierarchical PnR, cut feed-throughs?
     ) extends TileParams
@@ -70,8 +69,9 @@ class BoomTile(
     val boomParams: BoomTileParams,
     crossing: ClockCrossingType)
   (implicit p: Parameters) extends BaseTile(boomParams, crossing)(p)
-    with HasExternalInterrupts
-    //with HasLazyRoCC  // implies CanHaveSharedFPU with CanHavePTW with HasHellaCache
+    with SinksExternalInterrupts
+    with SourcesExternalNotifications
+    with HasBoomLazyRoCC  // implies CanHaveSharedFPU with CanHavePTW with HasHellaCache
     with CanHaveBoomPTW
     with HasBoomHellaCache
     with HasBoomICacheFrontend
@@ -88,7 +88,7 @@ class BoomTile(
   }
   dtim_adapter.foreach(lm => connectTLSlave(lm.node, xBytes))
 
-  val bus_error_unit = tileParams.core.tileControlAddr map { a =>
+  val bus_error_unit = boomParams.beuAddr map { a =>
     val beu = LazyModule(new BusErrorUnit(new L1BusErrors, BusErrorUnitParams(a)))
     intOutwardNode := beu.intNode
     connectTLSlave(beu.node, xBytes)
@@ -106,13 +106,6 @@ class BoomTile(
   tlOtherMastersNode := tile_master_blocker.map { _.node := tlMasterXbar.node } getOrElse { tlMasterXbar.node }
   masterNode :=* tlOtherMastersNode
   DisableMonitors { implicit p => tlSlaveXbar.node :*= slaveNode }
-
-  def findScratchpadFromICache: Option[AddressSet] = dtim_adapter.map { s =>
-    val finalNode = frontend.masterNode.edges.out.head.manager.managers.find(_.nodePath.last == s.node)
-    require (finalNode.isDefined, "Could not find the scratch pad; not reachable via icache?")
-    require (finalNode.get.address.size == 1, "Scratchpad address space was fragmented!")
-    finalNode.get.address(0)
-  }
 
   println(s"1 nDCachePorts before: $nDCachePorts")
   nDCachePorts += 1 /*core */ + (dtim_adapter.isDefined).toInt + p(UsePrefetcher).toInt
@@ -134,6 +127,85 @@ class BoomTile(
                         tileProperties ++
                         dtimProperty ++
                         itimProperty)
+    }
+
+    override def getOMComponents(resourceBindingsMap: ResourceBindingsMap): Seq[OMComponent] = {
+      val cores = getOMRocketCores(resourceBindingsMap)
+      cores
+    }
+
+    def getOMICacheFromBindings(resourceBindingsMap: ResourceBindingsMap): Option[OMICache] = {
+      boomParams.icache.map(i => frontend.icache.device.getOMComponents(resourceBindingsMap) match {
+        case Seq() => throw new IllegalArgumentException
+        case Seq(h) => h.asInstanceOf[OMICache]
+        case _ => throw new IllegalArgumentException
+      })
+    }
+
+    def getOMDCacheFromBindings(dCacheParams: DCacheParams, resourceBindingsMap: ResourceBindingsMap): Option[OMDCache] = {
+      val omDTIM: Option[OMDCache] = dtim_adapter.map(_.device.getMemory(dCacheParams, resourceBindingsMap))
+      val omDCache: Option[OMDCache] = tileParams.dcache.filterNot(_.scratch.isDefined).map(OMCaches.dcache(_, None))
+
+      require(!(omDTIM.isDefined && omDCache.isDefined))
+
+      omDTIM.orElse(omDCache)
+    }
+
+    def getInterruptTargets(): Seq[OMInterruptTarget] = {
+      Seq(OMInterruptTarget(
+        hartId = boomParams.hartId,
+        modes = OMModes.getModes(boomParams.core.useVM)
+      ))
+    }
+
+    def getOMRocketCores(resourceBindingsMap: ResourceBindingsMap): Seq[OMRocketCore] = {
+      val coreParams = rocketCoreParams(boomParams.core)
+
+      val omICache = getOMICacheFromBindings(resourceBindingsMap)
+
+      val omDCache = boomParams.dcache.flatMap{ getOMDCacheFromBindings(_, resourceBindingsMap)}
+
+      Seq(OMRocketCore(
+        isa = OMISA.rocketISA(coreParams, xLen),
+        mulDiv =  coreParams.mulDiv.map{ md => OMMulDiv.makeOMI(md, xLen)},
+        fpu = coreParams.fpu.map{f => OMFPU(fLen = f.fLen)},
+        performanceMonitor = PerformanceMonitor.permon(coreParams),
+        pmp = OMPMP.pmp(coreParams),
+        documentationName = tileParams.name.getOrElse("boom"),
+        hartIds = Seq(hartId),
+        hasVectoredInterrupts = true,
+        interruptLatency = 4,
+        nLocalInterrupts = coreParams.nLocalInterrupts,
+        nBreakpoints = coreParams.nBreakpoints,
+        branchPredictor = boomParams.btb.map(OMBTB.makeOMI),
+        dcache = omDCache,
+        icache = omICache
+      ))
+    }
+
+    def rocketCoreParams(params: BoomCoreParams): RocketCoreParams = {
+      RocketCoreParams(
+        bootFreqHz = params.bootFreqHz,
+        useVM = params.useVM,
+        useUser = params.useUser,
+        useDebug = params.useDebug,
+        useAtomics = params.useAtomics,
+        useAtomicsOnlyForIO = params.useAtomicsOnlyForIO,
+        useCompressed = params.useCompressed,
+        useSCIE = params.useSCIE,
+        mulDiv = params.mulDiv,
+        fpu = params.fpu,
+        nLocalInterrupts = params.nLocalInterrupts,
+        nPMPs = params.nPMPs,
+        nBreakpoints = params.nBreakpoints,
+        nPerfCounters = params.nPerfCounters,
+        haveBasicCounters = params.haveBasicCounters,
+        misaWritable = params.misaWritable,
+        haveCFlush = params.haveCFlush,
+        nL2TLBEntries = params.nL2TLBEntries,
+        mtvecInit = params.mtvecInit,
+        mtvecWritable = params.mtvecWritable
+      )
     }
   }
 
@@ -160,7 +232,7 @@ class BoomTile(
  * @param outer top level BOOM tile
  */
 class BoomTileModuleImp(outer: BoomTile) extends BaseTileModuleImp(outer)
-    //with HasLazyRoCCModule[BoomTile]
+    with HasBoomLazyRoCCModule
     with CanHaveBoomPTWModule
     with HasControlPlaneParameters
     with HasBoomHellaCacheModule
@@ -170,22 +242,22 @@ class BoomTileModuleImp(outer: BoomTile) extends BaseTileModuleImp(outer)
 
   val core = Module(new BoomCore()(outer.p, outer.dcache.module.edge))
 
-  //val fpuOpt = outer.tileParams.core.fpu.map(params => Module(new FPU(params)(outer.p))) //RocketFpu - not needed
-
   // Observe the Tilelink Channel C traffic leaving the L1D (writeback/releases).
   val tl_c = outer.dCacheTap.out(0)._1.c
   core.io.release.valid := tl_c.fire()
   core.io.release.bits.address := tl_c.bits.address
 
-  val uncorrectable = RegInit(false.B)
-  val halt_and_catch_fire = outer.boomParams.hcfOnUncorrectable.option(IO(Output(Bool())))
+  // Report unrecoverable error conditions; for now the only cause is cache ECC errors
+  outer.reportHalt(List(outer.frontend.module.io.errors, outer.dcache.module.io.errors))
 
-  outer.dtim_adapter.foreach { lm => dcachePorts += lm.module.io.dmem }
+  // Report when the tile has ceased to retire instructions; for now the only cause is clock gating
+  //outer.reportCease(outer.boomParams.core.clockGate.option(
+  //  !outer.dcache.module.io.cpu.clock_enabled &&
+  //  !outer.frontend.module.io.cpu.clock_enabled &&
+  //  !ptw.io.dpath.clock_enabled &&
+  //  core.io.cease)) // clock-gating is not supported
 
-  outer.bus_error_unit.foreach { lm =>
-    lm.module.io.errors.dcache := outer.dcache.module.io.errors
-    lm.module.io.errors.icache := outer.frontend.module.io.errors
-  }
+  outer.reportWFI(None) // TODO: actually report this?
 
   val memBase = IO(Input(UInt(p(XLen).W)))
   val memMask = IO(Input(UInt(p(XLen).W)))
@@ -213,38 +285,35 @@ class BoomTileModuleImp(outer: BoomTile) extends BaseTileModuleImp(outer)
   fpga_trace := core.io.fpga_trace
 
   outer.decodeCoreInterrupts(core.io.interrupts) // Decode the interrupt vector
-  outer.bus_error_unit.foreach { beu => core.io.interrupts.buserror.get := beu.module.io.interrupt }
-  core.io.hartid := constants.hartid // Pass through the hartid
-  trace.foreach { _ := core.io.trace }
-  halt_and_catch_fire.foreach { _ := uncorrectable }
-  outer.frontend.module.io.cpu <> core.io.ifu
-  outer.frontend.module.io.reset_vector := constants.reset_vector
-  outer.frontend.module.io.hartid := constants.hartid
-  outer.dcache.module.io.hartid := constants.hartid
-  dcachePorts += core.io.dmem // TODO outer.dcachePorts += () => module.core.io.dmem ??
-  //fpuOpt foreach { fpu => core.io.fpu <> fpu.io } RocketFpu - not needed in boom
-  core.io.ptw := DontCare
-  if (usingPTW)
-  {
-    core.io.ptw <> ptw.get.io.dpath
+
+  outer.bus_error_unit.foreach { beu =>
+    core.io.interrupts.buserror.get := beu.module.io.interrupt
+    beu.module.io.errors.dcache := outer.dcache.module.io.errors
+    beu.module.io.errors.icache := outer.frontend.module.io.errors
   }
+
+  // Pass through various external constants and reports
+  outer.traceSourceNode.bundle <> core.io.trace
+  core.io.hartid := constants.hartid
+  outer.dcache.module.io.hartid := constants.hartid
+  outer.frontend.module.io.hartid := constants.hartid
+  outer.frontend.module.io.reset_vector := constants.reset_vector
+
+  // Connect the core pipeline to other intra-tile modules
+  outer.frontend.module.io.cpu <> core.io.ifu
+  dcachePorts += core.io.dmem // TODO outer.dcachePorts += () => module.core.io.dmem ??
+  core.io.ptw <> ptw.io.dpath
+  fcsr_rm := core.io.fcsr_rm
   core.io.rocc := DontCare
-  core.io.fpu := DontCare
   core.io.reset_vector := DontCare
 
-  //roccCore.cmd <> core.io.rocc.cmd
-  //roccCore.exception := core.io.rocc.exception
-  //core.io.rocc.resp <> roccCore.resp
-  //core.io.rocc.busy := roccCore.busy
-  //core.io.rocc.interrupt := roccCore.interrupt
-
-  when(!uncorrectable)
+  if (outer.roccs.size > 0)
   {
-    uncorrectable :=
-    List(outer.frontend.module.io.errors, outer.dcache.module.io.errors)
-      .flatMap { e => e.uncorrectable.map(_.valid) }
-      .reduceOption(_||_)
-      .getOrElse(false.B)
+     cmdRouter.get.io.in <> core.io.rocc.cmd
+     outer.roccs.foreach(_.module.io.exception := core.io.rocc.exception)
+     core.io.rocc.resp <> respArb.get.io.out
+     core.io.rocc.busy <> (cmdRouter.get.io.busy || outer.roccs.map(_.module.io.busy).reduce(_||_))
+     core.io.rocc.interrupt := outer.roccs.map(_.module.io.interrupt).reduce(_||_)
   }
 
   // add prefetcher
@@ -259,6 +328,17 @@ class BoomTileModuleImp(outer: BoomTile) extends BaseTileModuleImp(outer)
     prefetcher.io.df := core.io.df
   }
 
+  // Connect the coprocessor interface
+  //if (outer.roccs.size > 0) {
+  //  cmdRouter.get.io.in <> core.io.rocc.cmd
+  //  outer.roccs.foreach(_.module.io.exception := core.io.rocc.exception)
+  //  core.io.rocc.resp <> respArb.get.io.out
+  //  core.io.rocc.busy <> (cmdRouter.get.io.busy || outer.roccs.map(_.module.io.busy).reduce(_ || _))
+  //  core.io.rocc.interrupt := outer.roccs.map(_.module.io.interrupt).reduce(_ || _)
+  //} // rocc is not supported
+
+  outer.dtim_adapter.foreach { lm => dcachePorts += lm.module.io.dmem }
+
   // TODO eliminate this redundancy
   val h = dcachePorts.size
   val c = core.dcacheArbPorts
@@ -269,11 +349,8 @@ class BoomTileModuleImp(outer: BoomTile) extends BaseTileModuleImp(outer)
   // TODO figure out how to move the below into their respective mix-ins
   dcacheArb.io.requestor <> dcachePorts
   ptwPorts += core.io.ptw_tlb
-  core.io.ptw_tlb := DontCare
-  if (usingPTW)
-  {
-    ptw.get.io.requestor <> ptwPorts
-  }
+  ptw.io.requestor <> ptwPorts
+
   val frontendStr = outer.frontend.module.toString
   ElaborationArtefacts.add(
     """core.config""",

@@ -30,7 +30,7 @@ import boom.common._
  */
 class FetchBufferResp(implicit p: Parameters) extends BoomBundle()(p)
 {
-   val uops = Vec(decodeWidth, new MicroOp())
+   val uops = Vec(coreWidth, Valid(new MicroOp()))
 }
 
 /**
@@ -55,6 +55,7 @@ class FetchBuffer(num_entries: Int)(implicit p: Parameters) extends BoomModule()
    require (num_entries > 1)
    private val num_elements = num_entries*fetchWidth
    private val ram = Mem(num_elements, new MicroOp())
+   ram.suggestName("fb_uop_ram")
    private val write_ptr = RegInit(0.U(log2Ceil(num_elements).W))
    private val read_ptr = RegInit(0.U(log2Ceil(num_elements).W))
 
@@ -71,6 +72,7 @@ class FetchBuffer(num_entries: Int)(implicit p: Parameters) extends BoomModule()
    io.enq.ready := count < (num_elements-fetchWidth).U
 
    // Input microops.
+   val in_mask = Wire(Vec(fetchWidth, Bool()))
    val in_uops = Wire(Vec(fetchWidth, new MicroOp()))
 
    // Compacted/shifted microops (and the shifted valid mask).
@@ -81,14 +83,14 @@ class FetchBuffer(num_entries: Int)(implicit p: Parameters) extends BoomModule()
    {
       compact_mask(i) := false.B
       compact_uops(i) := DontCare
-      compact_uops(i).inst := 7.U
+      compact_uops(i).debug_inst := 7.U
    }
 
    // Step 1. Convert input FetchPacket into an array of MicroOps.
    for (i <- 0 until fetchWidth)
    {
       in_uops(i)                := DontCare
-      in_uops(i).valid          := io.enq.valid && io.enq.bits.mask(i)
+      in_mask(i)                := io.enq.valid && io.enq.bits.mask(i)
       in_uops(i).edge_inst      := false.B
       in_uops(i).pc             := (alignToFetchBoundary(io.enq.bits.pc)
                                   + (i << log2Ceil(coreInstBytes)).U)
@@ -104,7 +106,7 @@ class FetchBuffer(num_entries: Int)(implicit p: Parameters) extends BoomModule()
          }
       }
       in_uops(i).ftq_idx        := io.enq.bits.ftq_idx
-      in_uops(i).inst           := io.enq.bits.insts(i)
+      in_uops(i).debug_inst     := io.enq.bits.insts(i)
       in_uops(i).is_rvc         := io.enq.bits.insts(i)(1,0) =/= 3.U && usingCompressed.B
       in_uops(i).xcpt_pf_if     := io.enq.bits.xcpt_pf_if
       in_uops(i).xcpt_ae_if     := io.enq.bits.xcpt_ae_if
@@ -130,7 +132,7 @@ class FetchBuffer(num_entries: Int)(implicit p: Parameters) extends BoomModule()
    var compact_idx = 0.U(log2Ceil(fetchWidth).W)
    for (i <- 0 until fetchWidth)
    {
-      val use_uop = i.U >= first_index && in_uops(i.U).valid
+      val use_uop = i.U >= first_index && in_mask(i.U)
       when (use_uop)
       {
          compact_uops(compact_idx) := in_uops(i.U)
@@ -147,20 +149,20 @@ class FetchBuffer(num_entries: Int)(implicit p: Parameters) extends BoomModule()
 
    // all enqueuing uops have been compacted.
    // How many incoming uops are there?
-   val popc_enqmask = PopCount(in_uops.map(_.valid))
+   val popc_enqmask = PopCount(in_mask)
    // What is the count of uops being added to the ram. Subtract off the bypassed uops.
    // But only bypass if ram is empty AND dequeue flops will be consumed.
    val enq_count =
       Mux(io.enq.fire() && (!io.deq.ready || count =/= 0.U),
          popc_enqmask,
-      Mux(io.enq.fire() && count === 0.U && popc_enqmask > decodeWidth.U,
-         popc_enqmask - decodeWidth.U,
+      Mux(io.enq.fire() && count === 0.U && popc_enqmask > coreWidth.U,
+         popc_enqmask - coreWidth.U,
          0.U)) // !enq.fire || (count===0 and popc <= decodeWIdth)
 
-   // If the ram is empty, bypass the first decodeWidth uops to the flops,
+   // If the ram is empty, bypass the first coreWidth uops to the flops,
    // and only write the remaining uops into the ram.
    val start_idx = Wire(UInt((log2Ceil(fetchWidth)+1).W))
-   start_idx := Mux(count === 0.U && io.deq.ready, decodeWidth.U, 0.U)
+   start_idx := Mux(count === 0.U && io.deq.ready, coreWidth.U, 0.U)
    for (i <- 0 until fetchWidth)
    {
       when (io.enq.fire() && i.U < enq_count)
@@ -180,14 +182,14 @@ class FetchBuffer(num_entries: Int)(implicit p: Parameters) extends BoomModule()
    //-------------------------------------------------------------
 
    val r_valid = RegInit(false.B)
-   val r_uops = Reg(Vec(decodeWidth, new MicroOp()))
+   val r_uops = Reg(Vec(coreWidth, Valid(new MicroOp())))
 
-   for (w <- 0 until decodeWidth)
+   for (w <- 0 until coreWidth)
    {
       when (io.deq.ready)
       {
          r_valid := count > 0.U || io.enq.valid
-         r_uops(w) := Mux(count === 0.U, compact_uops(w), ram(read_ptr + w.U))
+         r_uops(w).bits  := Mux(count === 0.U, compact_uops(w), ram(read_ptr + w.U))
          r_uops(w).valid := Mux(count === 0.U, compact_mask(w), count > w.U)
       }
    }
@@ -201,7 +203,7 @@ class FetchBuffer(num_entries: Int)(implicit p: Parameters) extends BoomModule()
 
    val deq_count =
       Mux(io.deq.ready,
-         Mux(count < decodeWidth.U, count, decodeWidth.U),
+         Mux(count < coreWidth.U, count, coreWidth.U),
          0.U)
    count := count + enq_count - deq_count
 
@@ -248,7 +250,7 @@ class FetchBuffer(num_entries: Int)(implicit p: Parameters) extends BoomModule()
       printf("\n Fetch4 : %d deq_count (%d) pc=0x%x\n",
          io.deq.valid,
          deq_count,
-         io.deq.bits.uops(0).pc
+         io.deq.bits.uops(0).bits.pc
          )
    }
 

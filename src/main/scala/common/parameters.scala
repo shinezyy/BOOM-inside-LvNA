@@ -27,9 +27,9 @@ case class BoomCoreParams(
    decodeWidth: Int = 1,
    numRobEntries: Int = 64,
    issueParams: Seq[IssueParams] = Seq(
-         IssueParams(issueWidth=1, numEntries=16, iqType=IQT_MEM.litValue),
-         IssueParams(issueWidth=2, numEntries=16, iqType=IQT_INT.litValue),
-         IssueParams(issueWidth=1, numEntries=16, iqType=IQT_FP.litValue)),
+         IssueParams(issueWidth=1, numEntries=16, iqType=IQT_MEM.litValue, dispatchWidth=1),
+         IssueParams(issueWidth=2, numEntries=16, iqType=IQT_INT.litValue, dispatchWidth=1),
+         IssueParams(issueWidth=1, numEntries=16, iqType=IQT_FP.litValue , dispatchWidth=1)),
    numLdqEntries: Int = 16,
    numStqEntries: Int = 16,
    numIntPhysRegisters: Int = 96,
@@ -42,8 +42,11 @@ case class BoomCoreParams(
    enablePrefetching: Boolean = false,
    enableBrResolutionRegister: Boolean = true,
    enableCommitMapTable: Boolean = false,
+   enableFastPNR: Boolean = false,
+   enableFastWakeupsToRename: Boolean = true,
    enableBTBContainsBranches: Boolean = true,
-   enableBranchPredictor: Boolean = false,
+   enableBranchPredictor: Boolean = true,
+   enableBTB: Boolean = true,
    enableBpdUModeOnly: Boolean = false,
    enableBpdUSModeHistory: Boolean = false,
    useAtomicsOnlyForIO: Boolean = false,
@@ -58,8 +61,9 @@ case class BoomCoreParams(
    imulLatency: Int = 3,
    fetchLatency: Int = 3,
    renameLatency: Int = 2,
-   regreadLatency: Int = 1,
    nPerfCounters: Int = 0,
+   numRXQEntries: Int = 4,
+   numRCQEntries: Int = 8,
    /* more stuff */
 
    useFetchMonitor: Boolean = true,
@@ -70,25 +74,25 @@ case class BoomCoreParams(
    misaWritable: Boolean = true,
    mtvecInit: Option[BigInt] = Some(BigInt(0)),
    mtvecWritable: Boolean = true,
+   haveCFlush: Boolean = false,
    mulDiv: Option[freechips.rocketchip.rocket.MulDivParams] = Some(MulDivParams()),
    nBreakpoints: Int = 1,
    nL2TLBEntries: Int = 512,
    nLocalInterrupts: Int = 0,
-   tileControlAddr: Option[BigInt] = None,
    useAtomics: Boolean = true,
    useDebug: Boolean = true,
    useUser: Boolean = true,
    useVM: Boolean = true,
-   useCompressed: Boolean = false
+   useCompressed: Boolean = false,
+   useSCIE: Boolean = false,
+   clockGate: Boolean = false
 ) extends freechips.rocketchip.tile.CoreParams
 {
-   val retireWidth: Int = decodeWidth
-   val useSCIE: Boolean = false  //??
    val haveFSDirty = false
    val pmpGranularity: Int = 4
    val instBits: Int = if (useCompressed) 16 else 32
    val lrscCycles: Int = 80 // worst case is 14 mispredicted branches + slop
-
+   val retireWidth = decodeWidth
    val jumpInFrontend: Boolean = false // unused in boom
    val nPMPs: Int = 8
 }
@@ -105,22 +109,23 @@ trait HasBoomCoreParameters extends freechips.rocketchip.tile.HasCoreParameters
 
    // fetchWidth provided by CoreParams class.
    // decodeWidth provided by CoreParams class.
-   // retireWidth provided by BoomCoreParams class.
-   val DISPATCH_WIDTH   = decodeWidth                // number of insts put into the IssueWindow
-   val COMMIT_WIDTH     = boomParams.retireWidth
 
-   require (decodeWidth == COMMIT_WIDTH)
-   require (DISPATCH_WIDTH == COMMIT_WIDTH)
+   // coreWidth is width of decode, width of integer rename, width of ROB, and commit width
+   val coreWidth = decodeWidth
+
    require (isPow2(fetchWidth))
-   require (decodeWidth <= fetchWidth)
+   require (coreWidth <= fetchWidth)
 
    //************************************
    // Data Structure Sizes
    val NUM_ROB_ENTRIES = boomParams.numRobEntries       // number of ROB entries (e.g., 32 entries for R10k)
+   val NUM_RXQ_ENTRIES = boomParams.numRXQEntries       // number of RoCC execute queue entries. Keep small since this holds operands and instruction bits
+   val NUM_RCQ_ENTRIES = boomParams.numRCQEntries       // number of RoCC commit queue entries. This can be large since it just keeps a pdst
    val NUM_LDQ_ENTRIES = boomParams.numLdqEntries       // number of LAQ entries
    val NUM_STQ_ENTRIES = boomParams.numStqEntries       // number of SAQ/SDQ entries
    val MAX_BR_COUNT    = boomParams.maxBrCount          // number of branches we can speculate simultaneously
-   val ftqSz           = NUM_ROB_ENTRIES / fetchWidth   // number of FTQ entries should match (or slightly exceed) ROB entries
+   val ftqSz           = NUM_ROB_ENTRIES / fetchWidth   // number of FTQ entries should match
+                                                        //   (or slightly exceed) ROB entries
    val fetchBufferSz   = boomParams.fetchBufferSz       // number of instructions that stored between fetch&decode
 
    val numIntPhysRegs  = boomParams.numIntPhysRegisters // size of the integer physical register file
@@ -148,8 +153,6 @@ trait HasBoomCoreParameters extends freechips.rocketchip.tile.HasCoreParameters
    val fetchLatency = boomParams.fetchLatency // how many cycles does fetch occupy?
    require (fetchLatency == 3) // do not currently support changing this
    val renameLatency = boomParams.renameLatency // how many cycles does rename occupy?
-   val regreadLatency = boomParams.regreadLatency // how many cycles does rrd occupy?
-   require (regreadLatency == 1) // Any color you like, so long as its black.
 
    val enableBrResolutionRegister = boomParams.enableBrResolutionRegister
 
@@ -165,6 +168,11 @@ trait HasBoomCoreParameters extends freechips.rocketchip.tile.HasCoreParameters
    require (issueParams.count(_.iqType == IQT_MEM.litValue) == 1 || usingUnifiedMemIntIQs)
    require (issueParams.count(_.iqType == IQT_INT.litValue) == 1)
 
+   // Currently, require issue dispatch widths all equal coreWidth
+   issueParams.map(x => require(x.dispatchWidth == coreWidth))
+   // TODO: In future, relax this constraint
+   issueParams.map(x => require(x.dispatchWidth <= coreWidth && x.dispatchWidth > 0))
+
    //************************************
    // Load/Store Unit
    val dcacheParams: DCacheParams = tileParams.dcache.get
@@ -176,7 +184,7 @@ trait HasBoomCoreParameters extends freechips.rocketchip.tile.HasCoreParameters
    //************************************
    // Branch Prediction
 
-   val enableBTB = true
+   val enableBTB = boomParams.enableBTB
    val enableBTBContainsBranches = boomParams.enableBTBContainsBranches
 
    val ENABLE_BRANCH_PREDICTOR = boomParams.enableBranchPredictor
@@ -184,59 +192,52 @@ trait HasBoomCoreParameters extends freechips.rocketchip.tile.HasCoreParameters
    val ENABLE_BPD_UMODE_ONLY = boomParams.enableBpdUModeOnly
    val ENABLE_BPD_USHISTORY = boomParams.enableBpdUSModeHistory
    // What is the maximum length of global history tracked?
-   var GLOBAL_HISTORY_LENGTH = 0
+   var globalHistoryLength = 0
    // What is the physical length of the VeryLongHistoryRegister? This must be
    // able to handle the GHIST_LENGTH as well as being able hold all speculative
    // updates well beyond the GHIST_LENGTH (i.e., +ROB_SZ and other buffering).
-   var VLHR_LENGTH = 0
-   var BPD_INFO_SIZE = 0
-   var ENABLE_VLHR = false
+   var bpdInfoSize = 0
 
-   val tageParams = boomParams.tage
-   val gshareParams = boomParams.gshare
-   val bpdBaseOnlyParams = boomParams.bpdBaseOnly
+   val tageBpuParams = boomParams.tage
+   val gshareBpuParams = boomParams.gshare
+   val baseOnlyBpuParams = boomParams.bpdBaseOnly
+   val randomBpuParams = boomParams.bpdRandom
 
    if (!ENABLE_BRANCH_PREDICTOR)
    {
-      BPD_INFO_SIZE = 1
-      GLOBAL_HISTORY_LENGTH = 1
+      bpdInfoSize = 1
+      globalHistoryLength = 1
    }
-   else if (bpdBaseOnlyParams.isDefined && bpdBaseOnlyParams.get.enabled)
+   else if (baseOnlyBpuParams.isDefined && baseOnlyBpuParams.get.enabled)
    {
-      GLOBAL_HISTORY_LENGTH = 8
-      BPD_INFO_SIZE = BaseOnlyBrPredictor.GetRespInfoSize(p, GLOBAL_HISTORY_LENGTH)
+      globalHistoryLength = 8
+      bpdInfoSize = BaseOnlyBrPredictor.GetRespInfoSize()
    }
-   else if (gshareParams.isDefined && gshareParams.get.enabled)
+   else if (gshareBpuParams.isDefined && gshareBpuParams.get.enabled)
    {
-      GLOBAL_HISTORY_LENGTH = gshareParams.get.history_length
-      BPD_INFO_SIZE = GShareBrPredictor.GetRespInfoSize(fetchWidth, GLOBAL_HISTORY_LENGTH)
+      globalHistoryLength = gshareBpuParams.get.historyLength
+      bpdInfoSize = GShareBrPredictor.GetRespInfoSize(globalHistoryLength)
    }
-   else if (tageParams.isDefined && tageParams.get.enabled)
+   else if (tageBpuParams.isDefined && tageBpuParams.get.enabled)
    {
-      GLOBAL_HISTORY_LENGTH = tageParams.get.history_lengths.max
-      BPD_INFO_SIZE = TageBrPredictor.GetRespInfoSize(p, fetchWidth)
-      ENABLE_VLHR = true
+      globalHistoryLength = tageBpuParams.get.historyLengths.max
+      bpdInfoSize = TageBrPredictor.GetRespInfoSize(p)
    }
-   else if (boomParams.bpdRandom.isDefined && boomParams.bpdRandom.get.enabled)
+   else if (randomBpuParams.isDefined && randomBpuParams.get.enabled)
    {
-      GLOBAL_HISTORY_LENGTH = 1
-      BPD_INFO_SIZE = RandomBrPredictor.GetRespInfoSize(p)
+      globalHistoryLength = 1
+      bpdInfoSize = RandomBrPredictor.GetRespInfoSize()
    }
-   else
-   {
-      require(!ENABLE_BRANCH_PREDICTOR) // set branch predictor in configs.scala
-      BPD_INFO_SIZE = 1
-      GLOBAL_HISTORY_LENGTH = 1
-   }
-   VLHR_LENGTH = GLOBAL_HISTORY_LENGTH+2*NUM_ROB_ENTRIES
 
    //************************************
    // Extra Knobs and Features
    val ENABLE_COMMIT_MAP_TABLE = boomParams.enableCommitMapTable
+   val enableFastPNR = boomParams.enableFastPNR
+   val enableFastWakeupsToRename = boomParams.enableFastWakeupsToRename
 
    //************************************
    // Implicitly calculated constants
-   val NUM_ROB_ROWS      = NUM_ROB_ENTRIES/decodeWidth
+   val NUM_ROB_ROWS      = NUM_ROB_ENTRIES/coreWidth
    val ROB_ADDR_SZ       = log2Ceil(NUM_ROB_ENTRIES)
    // the f-registers are mapped into the space above the x-registers
    val LOGICAL_REG_COUNT = if (usingFPU) 64 else 32
@@ -251,13 +252,13 @@ trait HasBoomCoreParameters extends freechips.rocketchip.tile.HasCoreParameters
    val NUM_BROB_ENTRIES  = NUM_ROB_ROWS //TODO explore smaller BROBs
    val BROB_ADDR_SZ      = log2Ceil(NUM_BROB_ENTRIES)
 
-   require (numIntPhysRegs >= (32 + decodeWidth))
-   require (numFpPhysRegs >= (32 + decodeWidth))
+   require (numIntPhysRegs >= (32 + coreWidth))
+   require (numFpPhysRegs >= (32 + coreWidth))
    require (MAX_BR_COUNT >=2)
    require (NUM_ROB_ROWS % 2 == 0)
-   require (NUM_ROB_ENTRIES % decodeWidth == 0)
-   require ((NUM_LDQ_ENTRIES-1) > decodeWidth)
-   require ((NUM_STQ_ENTRIES-1) > decodeWidth)
+   require (NUM_ROB_ENTRIES % coreWidth == 0)
+   require ((NUM_LDQ_ENTRIES-1) > coreWidth)
+   require ((NUM_STQ_ENTRIES-1) > coreWidth)
 
    //************************************
    // Custom Logic

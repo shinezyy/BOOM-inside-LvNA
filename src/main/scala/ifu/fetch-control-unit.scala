@@ -159,7 +159,7 @@ class FetchControlUnit(fetch_width: Int)(implicit p: Parameters) extends BoomMod
       // TODO lower toggle frequency
       val c = Counter(fetchWidth)
       c.inc()
-      val ret = AgePriorityEncoder(br_mask.toBools, c.value)
+      val ret = AgePriorityEncoder(br_mask.asBools, c.value)
       ret
    }
 
@@ -448,7 +448,7 @@ class FetchControlUnit(fetch_width: Int)(implicit p: Parameters) extends BoomMod
 
    // catch any BTB mispredictions (and fix-up missed JALs)
    bchecker.io.valid := f3_valid
-   bchecker.io.inst_mask := VecInit(f3_imemresp.mask.toBools)
+   bchecker.io.inst_mask := VecInit(f3_imemresp.mask.asBools)
    bchecker.io.is_br  := is_br
    bchecker.io.is_jal := is_jal
    bchecker.io.is_jr  := is_jr
@@ -482,7 +482,7 @@ class FetchControlUnit(fetch_width: Int)(implicit p: Parameters) extends BoomMod
    {
       f3_btb_update_bits.target   := f3_bpd_target
       f3_btb_update_bits.cfi_idx  := f3_bpd_br_idx
-      f3_btb_update_bits.bpd_type := BpredType.branch
+      f3_btb_update_bits.bpd_type := BpredType.BRANCH
       f3_btb_update_bits.cfi_type := CfiType.branch
    }
 
@@ -777,7 +777,8 @@ class FetchControlUnit(fetch_width: Int)(implicit p: Parameters) extends BoomMod
       // check that, if there is a jal, the last valid instruction is not after him.
       // <beq, jal, bne, ...>, either the beq or jal may be the last instruction, but because
       // the jal dominates everything after it, nothing valid can be after it.
-      val f3_is_jal = VecInit(f3_fetch_bundle.insts map {x => GetCfiType(ExpandRVC(x)) === CfiType.jal}).asUInt & f3_fetch_bundle.mask
+      val f3_is_jal = VecInit(f3_fetch_bundle.insts map {x =>
+        GetCfiType(ExpandRVC(x)) === CfiType.jal}).asUInt & f3_fetch_bundle.mask
       val f3_jal_idx = PriorityEncoder(f3_is_jal)
       val has_jal = f3_is_jal.orR
 

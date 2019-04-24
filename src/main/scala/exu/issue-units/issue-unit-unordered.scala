@@ -32,12 +32,12 @@ class IssueUnitStatic(
    params: IssueParams,
    num_wakeup_ports: Int)
    (implicit p: Parameters)
-   extends IssueUnit(params.numEntries, params.issueWidth, num_wakeup_ports, params.iqType)
+   extends IssueUnit(params.numEntries, params.issueWidth, num_wakeup_ports, params.iqType, params.dispatchWidth)
 {
    //-------------------------------------------------------------
    // Issue Table
 
-   val entry_wen_oh  = VecInit(Seq.fill(num_issue_slots){ Wire(Bits(DISPATCH_WIDTH.W)) })
+   val entry_wen_oh  = VecInit(Seq.fill(num_issue_slots){ Wire(Bits(dispatchWidth.W)) })
    for (i <- 0 until num_issue_slots)
    {
       issue_slots(i).in_uop.valid := entry_wen_oh(i).orR
@@ -53,15 +53,15 @@ class IssueUnitStatic(
    // Dispatch/Entry Logic
    // find a slot to enter a new dispatched instruction
 
-   val entry_wen_oh_array = Array.fill(num_issue_slots,DISPATCH_WIDTH){false.B}
-   var allocated = VecInit(Seq.fill(DISPATCH_WIDTH){false.B}) // did an instruction find an issue width?
+   val entry_wen_oh_array = Array.fill(num_issue_slots,dispatchWidth){false.B}
+   var allocated = VecInit(Seq.fill(dispatchWidth){false.B}) // did an instruction find an issue width?
 
    for (i <- 0 until num_issue_slots)
    {
-      var next_allocated = Wire(Vec(DISPATCH_WIDTH, Bool()))
+      var next_allocated = Wire(Vec(dispatchWidth, Bool()))
       var can_allocate = !(issue_slots(i).valid)
 
-      for (w <- 0 until DISPATCH_WIDTH)
+      for (w <- 0 until dispatchWidth)
       {
          entry_wen_oh_array(i)(w) = can_allocate && !(allocated(w))
 
@@ -76,12 +76,12 @@ class IssueUnitStatic(
    // also, translate from Scala data structures to Chisel Vecs
    for (i <- 0 until num_issue_slots)
    {
-      val temp_uop_val = Wire(Vec(DISPATCH_WIDTH, Bool()))
+      val temp_uop_val = Wire(Vec(dispatchWidth, Bool()))
 
-      for (w <- 0 until DISPATCH_WIDTH)
+      for (w <- 0 until dispatchWidth)
       {
          // TODO add ctrl bit for "allocates iss_slot"
-         temp_uop_val (w) := io.dis_valids(w) &&
+         temp_uop_val (w) := io.dis_uops(w).valid &&
                              !dis_uops(w).exception &&
                              !dis_uops(w).is_fence &&
                              !dis_uops(w).is_fencei &&
@@ -90,9 +90,9 @@ class IssueUnitStatic(
       entry_wen_oh(i) := temp_uop_val.asUInt
    }
 
-   for (w <- 0 until DISPATCH_WIDTH)
+   for (w <- 0 until dispatchWidth)
    {
-      io.dis_readys(w) := allocated(w)
+      io.dis_uops(w).ready := allocated(w)
    }
 
    //-------------------------------------------------------------

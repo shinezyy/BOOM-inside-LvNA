@@ -39,9 +39,7 @@ class FpPipeline(implicit p: Parameters) extends BoomModule()(p) with tile.HasFP
       val flush_pipeline   = Input(Bool())
       val fcsr_rm          = Input(UInt(width=freechips.rocketchip.tile.FPConstants.RM_SZ.W))
 
-      val dis_valids       = Input(Vec(DISPATCH_WIDTH, Bool())) // REFACTOR into single Decoupled()
-      val dis_uops         = Input(Vec(DISPATCH_WIDTH, new MicroOp()))
-      val dis_readys       = Output(Vec(DISPATCH_WIDTH, Bool()))
+      val dis_uops         = Vec(coreWidth, Flipped(Decoupled(new MicroOp)))
 
       // +1 for recoding.
       val ll_wport         = Flipped(Decoupled(new ExeUnitResp(fLen+1)))// from memory unit
@@ -61,10 +59,11 @@ class FpPipeline(implicit p: Parameters) extends BoomModule()(p) with tile.HasFP
    // construct all of the modules
 
    val exe_units        = new boom.exu.ExecutionUnits(fpu=true)
-   val issue_unit       = Module(new IssueUnitCollasping(
+   val issue_unit       = Module(new IssueUnitCollapsing(
                            issueParams.find(_.iqType == IQT_FP.litValue).get,
                            num_wakeup_ports))
-   val fregfile         = Module(new RegisterFileBehavorial(numFpPhysRegs,
+   issue_unit.suggestName("fp_issue_unit")
+   val fregfile         = Module(new RegisterFileSynthesizable(numFpPhysRegs,
                                  exe_units.num_frf_read_ports,
                                  exe_units.num_frf_write_ports + 1, // + 1 for ll writeback
                                  fLen+1,
@@ -103,22 +102,7 @@ class FpPipeline(implicit p: Parameters) extends BoomModule()(p) with tile.HasFP
    //-------------------------------------------------------------
 
    // Input (Dispatch)
-   for (w <- 0 until DISPATCH_WIDTH)
-   {
-      issue_unit.io.dis_valids(w) := io.dis_valids(w) && io.dis_uops(w).iqtype === issue_unit.iqType.U
-      issue_unit.io.dis_uops(w) := io.dis_uops(w)
-
-      // Or... add STDataGen micro-op for FP stores.
-      when (io.dis_uops(w).uopc === uopSTA && io.dis_uops(w).lrs2_rtype === RT_FLT)
-      {
-         issue_unit.io.dis_valids(w) := io.dis_valids(w)
-         issue_unit.io.dis_uops(w).uopc := uopSTD
-         issue_unit.io.dis_uops(w).fu_code := FUConstants.FU_F2I
-         issue_unit.io.dis_uops(w).lrs1_rtype := RT_X
-         issue_unit.io.dis_uops(w).prs1_busy := false.B
-      }
-   }
-   io.dis_readys := issue_unit.io.dis_readys
+   issue_unit.io.dis_uops <> io.dis_uops
 
    //-------------------------------------------------------------
    // **** Issue Stage ****
@@ -131,7 +115,7 @@ class FpPipeline(implicit p: Parameters) extends BoomModule()(p) with tile.HasFP
       iss_uops(i) := issue_unit.io.iss_uops(i)
 
       var fu_types = exe_units(i).io.fu_types
-      if (exe_units(i).supportedFuncUnits.fdiv && regreadLatency > 0)
+      if (exe_units(i).supportedFuncUnits.fdiv)
       {
          val fdiv_issued = iss_valids(i) && iss_uops(i).fu_code_is(FU_FDV)
          fu_types = fu_types & RegNext(~Mux(fdiv_issued, FU_FDV, 0.U))
@@ -167,7 +151,6 @@ class FpPipeline(implicit p: Parameters) extends BoomModule()(p) with tile.HasFP
    //-------------------------------------------------------------
 
    exe_units.map(_.io.brinfo := io.brinfo)
-   exe_units.map(_.io.com_exception := io.flush_pipeline)
 
    for ((ex,w) <- exe_units.withFilter(_.reads_frf).map(x=>x).zipWithIndex)
    {
@@ -191,18 +174,11 @@ class FpPipeline(implicit p: Parameters) extends BoomModule()(p) with tile.HasFP
 
    ll_wbarb.io.in(1) <> ifpu_resp
 
-   if (regreadLatency > 0)
-   {
-      // Cut up critical path by delaying the write by a cycle.
-      // Wakeup signal is sent on cycle S0, write is now delayed until end of S1,
-      // but Issue happens on S1 and RegRead doesn't happen until S2 so we're safe.
-      // (for regreadlatency >0).
-      fregfile.io.write_ports(0) <> WritePort(RegNext(ll_wbarb.io.out), FPREG_SZ, fLen+1)
-   }
-   else
-   {
-      fregfile.io.write_ports(0) <> WritePort(ll_wbarb.io.out, FPREG_SZ, fLen+1)
-   }
+
+   // Cut up critical path by delaying the write by a cycle.
+   // Wakeup signal is sent on cycle S0, write is now delayed until end of S1,
+   // but Issue happens on S1 and RegRead doesn't happen until S2 so we're safe.
+   fregfile.io.write_ports(0) := RegNext(WritePort(ll_wbarb.io.out, FPREG_SZ, fLen+1))
 
    assert (ll_wbarb.io.in(0).ready) // never backpressure the memory unit.
    when (ifpu_resp.valid) { assert (ifpu_resp.bits.uop.ctrl.rf_wen && ifpu_resp.bits.uop.dst_rtype === RT_FLT) }
@@ -215,7 +191,7 @@ class FpPipeline(implicit p: Parameters) extends BoomModule()(p) with tile.HasFP
          fregfile.io.write_ports(w_cnt).valid     := eu.io.fresp.valid && eu.io.fresp.bits.uop.ctrl.rf_wen
          fregfile.io.write_ports(w_cnt).bits.addr := eu.io.fresp.bits.uop.pdst
          fregfile.io.write_ports(w_cnt).bits.data := eu.io.fresp.bits.data
-         eu.io.fresp.ready                        := fregfile.io.write_ports(w_cnt).ready
+         eu.io.fresp.ready                        := true.B
          when (eu.io.fresp.valid)
          {
             assert(eu.io.fresp.ready, "No backpressuring the FPU")
@@ -225,7 +201,6 @@ class FpPipeline(implicit p: Parameters) extends BoomModule()(p) with tile.HasFP
          w_cnt += 1
       }
    }
-   require(w_cnt == 2) // TODO: right now +1 for ll_wport, +1 for FPU
    require (w_cnt == fregfile.io.write_ports.length)
 
    val fpiu_unit = exe_units.fpiu_unit

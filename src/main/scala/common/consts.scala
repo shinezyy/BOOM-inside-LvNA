@@ -90,10 +90,12 @@ trait BrPredConstants
  */
 trait IQType
 {
-   val IQT_SZ  = 2
-   val IQT_INT = 0.U(IQT_SZ.W)
-   val IQT_MEM = 1.U(IQT_SZ.W)
-   val IQT_FP  = 2.U(IQT_SZ.W)
+   val IQT_SZ  = 3
+   val IQT_INT = 1.U(IQT_SZ.W)
+   val IQT_MEM = 2.U(IQT_SZ.W)
+   val IQT_FP  = 4.U(IQT_SZ.W)
+
+   val IQT_MFP = 6.U(IQT_SZ.W)
 }
 
 /**
@@ -304,6 +306,8 @@ trait ScalarOpConstants
    val uopERET      = 106.U(UOPC_SZ.W) // pass uop down the CSR pipeline, also is ERET
    val uopSFENCE    = 107.U(UOPC_SZ.W)
 
+   val uopROCC      = 108.U(UOPC_SZ.W)
+
    // The Bubble Instruction (Machine generated NOP)
    // Insert (XOR x0,x0,x0) which is different from software compiler
    // generated NOPs which are (ADDI x0, x0, 0).
@@ -322,7 +326,6 @@ trait ScalarOpConstants
       uop.is_load    := false.B
       uop.pdst       := 0.U
       uop.dst_rtype  := RT_X
-      uop.valid      := false.B
       // TODO these unnecessary? used in regread stage?
       uop.is_br_or_jmp := false.B
 

@@ -36,12 +36,8 @@ class MicroOp(implicit p: Parameters) extends BoomBundle()(p)
    with freechips.rocketchip.rocket.constants.MemoryOpConstants
    with freechips.rocketchip.rocket.constants.ScalarOpConstants
 {
-   // Is this uop valid? or has it been masked out,
-   // Used by fetch buffer and Decode stage.
-   val valid            = Bool()
-
    val uopc             = UInt(UOPC_SZ.W)       // micro-op code
-   val inst             = UInt(32.W)
+   val debug_inst       = UInt(32.W)
    val is_rvc           = Bool()
    val pc               = UInt(coreMaxAddrBits.W) // TODO remove -- use FTQ to get PC. Change to debug_pc.
    val iqtype           = UInt(IQT_SZ.W)        // which issue unit do we use?
@@ -68,6 +64,7 @@ class MicroOp(implicit p: Parameters) extends BoomBundle()(p)
 
    val br_prediction    = new BranchPredInfo
 
+
    // stat tracking of committed instructions
    val stat_brjmp_mispredicted = Bool()                 // number of mispredicted branches/jmps
    val stat_btb_made_pred      = Bool()                 // the BTB made a prediction (even if BPD overrided it)
@@ -89,6 +86,7 @@ class MicroOp(implicit p: Parameters) extends BoomBundle()(p)
    val rob_idx          = UInt(ROB_ADDR_SZ.W)
    val ldq_idx          = UInt(LDQ_ADDR_SZ.W)
    val stq_idx          = UInt(STQ_ADDR_SZ.W)
+   val rxq_idx          = UInt(log2Ceil(NUM_RXQ_ENTRIES).W)
    val pdst             = UInt(PREG_SZ.W)
    val pop1             = UInt(PREG_SZ.W)
    val pop2             = UInt(PREG_SZ.W)
@@ -139,7 +137,11 @@ class MicroOp(implicit p: Parameters) extends BoomBundle()(p)
    val debug_wdata      = UInt(xLen.W)
    val debug_events     = new DebugStageEvents
 
-   def fu_code_is(_fu: UInt) = fu_code === _fu
+
+   // Is it possible for this uop to misspeculate, preventing the commit of subsequent uops?
+   def unsafe           = is_load || is_store && !is_fence || is_br_or_jmp && !is_jal
+
+   def fu_code_is(_fu: UInt) = (fu_code & _fu) =/= 0.U
 }
 
 /**
