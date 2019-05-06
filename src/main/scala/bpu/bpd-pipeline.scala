@@ -26,12 +26,10 @@ package boom.bpu
 import chisel3._
 import chisel3.util._
 import chisel3.core.withReset
-
-import freechips.rocketchip.config.{Parameters}
-import freechips.rocketchip.util.{Str, UIntToAugmentedUInt}
-
+import freechips.rocketchip.config.Parameters
+import freechips.rocketchip.util.{GTimer, Str, UIntToAugmentedUInt}
 import boom.common._
-import boom.exu.{BranchUnitResp}
+import boom.exu.BranchUnitResp
 
 /**
  * Give this to each instruction/uop and pass this down the pipeline to the branch unit
@@ -121,6 +119,9 @@ class BranchPredictionStage(implicit p: Parameters) extends BoomModule
   io.f2_btb_resp.valid := btb.io.resp.valid && io.f2_valid
   io.f2_btb_resp.bits := btb.io.resp.bits
 
+  val f2_pc = io.f2_btb_resp.bits.fetch_pc
+  val f2_aligned_pc = (~((~f2_pc).asUInt | (fetchWidth*coreInstBytes - 1).U)).asUInt
+
   bpd.io.f2_bim_resp := btb.io.resp.bits.bim_resp
   bpd.io.f2_replay := io.f2_replay
 
@@ -136,16 +137,16 @@ class BranchPredictionStage(implicit p: Parameters) extends BoomModule
   // TODO XXX  reenable RAS
 
   // update RAS based on BTB's prediction information (or the branch-check correction).
-  //val jmp_idx = f2_btb.bits.cfi_idx
+  val jmp_idx = io.f2_btb_resp.bits.cfi_idx
 
   btb.io.ras_update := io.f3_ras_update
-  btb.io.ras_update.valid := false.B // TODO XXX renable RAS (f2_btb.valid || io.f3_ras_update.valid) &&
-                                     // !io.fetch_stalled
-  //when (f2_btb.valid) {
-  //   btb.io.ras_update.bits.is_call      := BpredType.isCall(f2_btb.bits.bpd_type)
-  //   btb.io.ras_update.bits.is_ret       := BpredType.isReturn(f2_btb.bits.bpd_type)
-  //   btb.io.ras_update.bits.return_addr  := f2_aligned_pc + (jmp_idx << 2.U) + 4.U
-  //}
+  btb.io.ras_update.valid :=  (io.f2_btb_resp.valid || io.f3_ras_update.valid) && !io.f2_stall
+
+  when (io.f2_btb_resp.valid) {
+    btb.io.ras_update.bits.is_call      := BpredType.isCall(io.f2_btb_resp.bits.bpd_type)
+    btb.io.ras_update.bits.is_ret       := BpredType.isReturn(io.f2_btb_resp.bits.bpd_type)
+    btb.io.ras_update.bits.return_addr  := f2_aligned_pc + (jmp_idx << 2).asUInt + 4.U
+  }
 
   //************************************************
   // Update the BTB/BIM

@@ -31,12 +31,9 @@ package boom.bpu
 
 import chisel3._
 import chisel3.util._
-
 import freechips.rocketchip.config.Parameters
-import freechips.rocketchip.util.Str
-
+import freechips.rocketchip.util.{GTimer, Str}
 import boom.common._
-import boom.exu._
 
 /**
  * Normal set-associative branch target buffer. Checks an incoming
@@ -164,28 +161,45 @@ class BTBsa(implicit p: Parameters) extends BoomBTB
 
   val s1_pc = RegEnable(io.req.bits.addr, !stall)
   s1_resp_bits.fetch_pc := s1_pc
+  s1_resp_bits.from_ras := false.B
 
   if (nRAS > 0) {
     val ras = new RAS(nRAS, coreInstBytes)
     val doPeek = (hits_oh zip data_out map {case(hit, data) => hit && BpredType.isReturn(data.bpd_type)}).reduce(_||_)
     val isEmpty = if (rasCheckForEmpty) ras.isEmpty else false.B
-    when (!isEmpty && doPeek) {
-      s1_resp_bits.target := ras.peek
+
+    when (doPeek) {
+      when (!isEmpty) {
+        s1_resp_bits.target := ras.peek
+        dprintf(D_RAS, "[%d] read 0x%x from RAS for req: 0x%x\n",
+          GTimer(), ras.peek, io.req.bits.addr)
+        s1_resp_bits.from_ras := true.B
+
+      } .otherwise {
+        dprintf(D_RAS, "[%d] reject to provide prediction when RAS empty\n", GTimer())
+        s1_valid := false.B
+      }
     }
 
     when (io.ras_update.valid) {
       when (io.ras_update.bits.is_call) {
         ras.push(io.ras_update.bits.return_addr)
+        dprintf(D_RAS, "[%d] push 0x%x to RAS for call inst\n",
+          GTimer(), io.ras_update.bits.return_addr)
         if (bypassCalls) {
           // bypassing couples ras_update.valid to the critical path.
           when (doPeek) {
             s1_resp_bits.target := io.ras_update.bits.return_addr
           }
         }
-      } .elsewhen (io.ras_update.bits.is_ret) {// only pop if BTB hit!
+      } .elsewhen (io.ras_update.bits.is_ret) { // only pop if BTB hit!
+        dprintf(D_RAS, "[%d] pop 0x%x from RAS\n",
+          GTimer(), ras.peek)
         ras.pop()
       }
     }
+
+    // on context switch ras_valid_entries should be cleared
   }
 
   //************************************************

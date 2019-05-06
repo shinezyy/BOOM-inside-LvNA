@@ -327,6 +327,8 @@ class DenseBTB(implicit p: Parameters) extends BoomBTB
     }
   }
 
+  s1_resp_bits.from_ras := false.B
+
   if (nRAS > 0) {
     val ras = new RAS(nRAS, coreInstBytes)
     // TODO: assumes only short branches...need to verify this
@@ -343,6 +345,7 @@ class DenseBTB(implicit p: Parameters) extends BoomBTB
           // bypassing couples ras_update.valid to the critical path.
           when (doPeek) {
             s1_resp_bits.target := io.ras_update.bits.return_addr
+            s1_resp_bits.from_ras := true.B
           }
         }
       } .elsewhen (io.ras_update.bits.is_ret) {// only pop if BTB hit!

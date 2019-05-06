@@ -131,6 +131,7 @@ class BoomBTBResp(implicit p: Parameters) extends BoomBTBBundle
   val fetch_pc  = UInt(vaddrBits.W) // the PC we're predicting on (start of the fetch packet).
 
   val bim_resp  = Valid(new BimResp) // Output from the bimodal table. Valid if prediction provided.
+  val from_ras  = Bool()
 }
 
 /**
