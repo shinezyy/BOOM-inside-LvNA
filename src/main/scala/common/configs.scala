@@ -143,13 +143,13 @@ class WithSmallBooms extends Config((site, here, up) => {
       core = r.core.copy(
          fetchWidth = 2,
          decodeWidth = 1,
-         numRobEntries = 16,
+         numRobEntries = 32,
          issueParams = Seq(
             IssueParams(issueWidth=1, numEntries=4, iqType=IQT_MEM.litValue, dispatchWidth=1),
             IssueParams(issueWidth=1, numEntries=4, iqType=IQT_INT.litValue, dispatchWidth=1),
             IssueParams(issueWidth=1, numEntries=4, iqType=IQT_FP.litValue , dispatchWidth=1)),
-         numIntPhysRegisters = 48,
-         numFpPhysRegisters = 48,
+         numIntPhysRegisters = 32,
+         numFpPhysRegisters = 32,
          numLdqEntries=4,
          numStqEntries=4,
          maxBrCount = 4,
