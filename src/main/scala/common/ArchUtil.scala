@@ -16,6 +16,15 @@ class SaturatingCounter(val n: Int) {
     }
     !will_wrap
   }
+
+  def dec(): Bool = {
+    val will_wrap = value === 0.U
+    when (!will_wrap) {
+      value := value - 1.U
+    }
+    !will_wrap
+  }
+
   def clear(): Unit = {
     value := 0.U
   }
