@@ -150,8 +150,9 @@ class BranchChecker(fetch_width: Int)(implicit p: Parameters) extends BoomModule
    io.ras_update.valid := jal_may_win && io.is_call(jal_idx)
    io.ras_update.bits.is_call     := true.B
    io.ras_update.bits.is_ret      := false.B
+   val jal_shamt = if (p(EnableRVC)) 1 else 2
    io.ras_update.bits.return_addr := (io.aligned_pc
-                                     + (jal_idx << log2Ceil(fetchBytes))
+                                     + (jal_idx << jal_shamt).asUInt
                                      + Mux(io.is_rvc(jal_idx), 2.U, 4.U))
    println(s"fetchWidth: $fetch_width, fetchBytes: $fetchBytes, log2Ceil(fetchBytes): ${log2Ceil(fetchBytes)}\n")
    when (jal_may_win) {

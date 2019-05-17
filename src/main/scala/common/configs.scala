@@ -160,7 +160,7 @@ class WithSmallBooms extends Config((site, here, up) => {
          numStqEntries=4,
          maxBrCount = 4,
          btb = BoomBTBParameters(btbsa=true, densebtb=false, nSets=32, nWays=2,
-            nRAS=64, tagSz=10, bypassCalls=false),
+            nRAS=64, tagSz=10, bypassCalls=false, rasCheckForEmpty=true),
          bpdBaseOnly = None,
          gshare = Some(GShareParameters(historyLength=11, numSets=2048)),
          tage = None,

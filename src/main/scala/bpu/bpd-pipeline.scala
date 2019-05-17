@@ -141,13 +141,20 @@ class BranchPredictionStage(implicit p: Parameters) extends BoomModule
   // update RAS based on BTB's prediction information (or the branch-check correction).
   val jmp_idx = io.f2_btb_resp.bits.cfi_idx
 
-  btb.io.ras_update := io.f3_ras_update
-  btb.io.ras_update.valid :=  (io.f2_btb_resp.valid || io.f3_ras_update.valid) && !io.f2_stall
+  btb.io.ras_update := DontCare
+  btb.io.ras_update.valid := false.B
 
-  when (io.f2_btb_resp.valid) {
-    btb.io.ras_update.bits.is_call      := BpredType.isCall(io.f2_btb_resp.bits.bpd_type)
-    btb.io.ras_update.bits.is_ret       := BpredType.isReturn(io.f2_btb_resp.bits.bpd_type)
-    btb.io.ras_update.bits.return_addr  := f2_aligned_pc + (jmp_idx << 2).asUInt + 4.U
+  when (!io.f2_stall && io.f3_ras_update.valid) {
+    btb.io.ras_update := io.f3_ras_update
+    when(btb.io.ras_update.bits.is_call) {
+      dprintf(D_RAS, "[%d] 0x%x will push return addr 0x%x, jmp_idx: %d\n",
+        GTimer(), io.f3_btb_update.bits.pc, btb.io.ras_update.bits.return_addr, jmp_idx)
+    }
+
+  }.elsewhen(!io.f2_stall && io.f2_btb_resp.valid && BpredType.isReturn(io.f2_btb_resp.bits.bpd_type)) {
+    btb.io.ras_update.valid := true.B
+    btb.io.ras_update.bits.is_ret := true.B
+    btb.io.ras_update.bits.is_call := false.B
   }
 
   //************************************************
