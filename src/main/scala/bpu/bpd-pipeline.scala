@@ -41,6 +41,8 @@ class BranchPredInfo(implicit p: Parameters) extends BoomBundle
   val btb_hit   = Bool() // this instruction was the br/jmp predicted by the BTB
   val btb_taken = Bool() // this instruction was the br/jmp predicted by the BTB and was taken
 
+  val ras_pred  = Bool()
+
   val bpd_blame = Bool() // Does the BPD get credit for this prediction? (during BRU check).
   val bpd_hit   = Bool() // did the bpd predict this instruction? (ie, tag hit in the BPD)
   val bpd_taken = Bool() // did the bpd predict taken for this instruction?

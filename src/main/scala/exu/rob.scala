@@ -409,6 +409,11 @@ class Rob(
          rob_uop(GetRowIdx(io.brinfo.rob_idx)).stat_btb_made_pred      := io.brinfo.btb_made_pred
          rob_uop(GetRowIdx(io.brinfo.rob_idx)).stat_bpd_mispredicted   := io.brinfo.bpd_mispredict
          rob_uop(GetRowIdx(io.brinfo.rob_idx)).stat_bpd_made_pred      := io.brinfo.bpd_made_pred
+
+         rob_uop(GetRowIdx(io.brinfo.rob_idx)).stat_ras_mispredicted   := io.brinfo.ras_mispredict
+         rob_uop(GetRowIdx(io.brinfo.rob_idx)).stat_ras_made_pred      := io.brinfo.ras_made_pred
+         rob_uop(GetRowIdx(io.brinfo.rob_idx)).stat_ras_give_up        := io.brinfo.ras_give_up
+         rob_uop(GetRowIdx(io.brinfo.rob_idx)).stat_ras_success        := io.brinfo.ras_success
       }
 
       //-----------------------------------------------

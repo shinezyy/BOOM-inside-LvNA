@@ -132,6 +132,7 @@ class BoomBTBResp(implicit p: Parameters) extends BoomBTBBundle
 
   val bim_resp  = Valid(new BimResp) // Output from the bimodal table. Valid if prediction provided.
   val from_ras  = Bool()
+  val ras_empty = Bool()
 }
 
 /**

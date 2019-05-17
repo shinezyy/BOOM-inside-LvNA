@@ -25,11 +25,10 @@ package boom.ifu
 
 import chisel3._
 import chisel3.util._
-
 import freechips.rocketchip.config.Parameters
-
 import boom.bpu._
 import boom.common._
+import freechips.rocketchip.util.GTimer
 
 /**
  * Combinational logic to verify that the BoomBTB predicted correctly. This chooses
@@ -154,4 +153,11 @@ class BranchChecker(fetch_width: Int)(implicit p: Parameters) extends BoomModule
    io.ras_update.bits.return_addr := (io.aligned_pc
                                      + (jal_idx << log2Ceil(fetchBytes))
                                      + Mux(io.is_rvc(jal_idx), 2.U, 4.U))
+   println(s"fetchWidth: $fetch_width, fetchBytes: $fetchBytes, log2Ceil(fetchBytes): ${log2Ceil(fetchBytes)}\n")
+   when (jal_may_win) {
+      dprintf(D_RAS, "[%d] aligned pc: 0x%x, jal_idx: %d, return addr: 0x%x, is_jal:",
+         GTimer(), io.aligned_pc, jal_idx, io.ras_update.bits.return_addr)
+      io.is_jal.foreach{x => dprintf(D_RAS, "%d", x)}
+      dprintf(D_RAS, "\n")
+   }
 }

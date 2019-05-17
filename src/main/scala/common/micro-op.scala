@@ -71,6 +71,10 @@ class MicroOp(implicit p: Parameters) extends BoomBundle()(p)
    val stat_btb_mispredicted   = Bool()                 //
    val stat_bpd_made_pred      = Bool()                 // the BPD made the prediction
    val stat_bpd_mispredicted   = Bool()                 // denominator: all committed branches
+   val stat_ras_made_pred      = Bool()
+   val stat_ras_mispredicted   = Bool()
+   val stat_ras_give_up        = Bool()
+   val stat_ras_success        = Bool()
 
    // Index into FTQ to figure out our fetch PC.
    val ftq_idx          = UInt(log2Ceil(ftqSz).W)

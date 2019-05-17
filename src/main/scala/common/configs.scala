@@ -14,6 +14,7 @@ import freechips.rocketchip.subsystem.{SystemBusKey}
 import freechips.rocketchip.devices.tilelink.{BootROMParams}
 import freechips.rocketchip.rocket._
 import freechips.rocketchip.tile._
+import freechips.rocketchip.config.Field
 
 import boom.bpu._
 import boom.exu._
@@ -128,11 +129,16 @@ class WithTrace extends Config((site, here, up) => {
 /**
  * Enable RVC
  */
+
+
+case object EnableRVC extends Field[Boolean](false)
+
 class WithRVC extends Config((site, here, up) => {
    case BoomTilesKey => up(BoomTilesKey, site) map {r => r.copy(
       core = r.core.copy(
          fetchWidth = r.core.fetchWidth * 2,
          useCompressed = true))}
+   case EnableRVC => true
 })
 
 /**

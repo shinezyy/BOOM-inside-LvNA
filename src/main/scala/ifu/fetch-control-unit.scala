@@ -537,6 +537,8 @@ class FetchControlUnit(fetch_width: Int)(implicit p: Parameters) extends BoomMod
       f3_fetch_bundle.bpu_info(w).btb_hit       := f3_btb_resp.valid
       f3_fetch_bundle.bpu_info(w).btb_taken     := false.B
 
+      f3_fetch_bundle.bpu_info(w).ras_pred      := false.B
+
       f3_fetch_bundle.bpu_info(w).bpd_blame     := false.B
       f3_fetch_bundle.bpu_info(w).bpd_hit       := io.f3_bpd_resp.valid
       f3_fetch_bundle.bpu_info(w).bpd_taken     := io.f3_bpd_resp.bits.takens(w.U)
@@ -560,6 +562,7 @@ class FetchControlUnit(fetch_width: Int)(implicit p: Parameters) extends BoomMod
       when (w.U === f3_btb_resp.bits.cfi_idx && f3_btb_resp.valid)
       {
          f3_fetch_bundle.bpu_info(w).btb_taken := f3_btb_resp.bits.taken
+         f3_fetch_bundle.bpu_info(w).ras_pred := f3_btb_resp.bits.from_ras && !f3_btb_resp.bits.ras_empty
       }
    }
 

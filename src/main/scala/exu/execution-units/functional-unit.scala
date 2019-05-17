@@ -197,6 +197,10 @@ class BrResolutionInfo(implicit p: Parameters) extends BoomBundle()(p)
    val btb_mispredict = Bool()
    val bpd_made_pred  = Bool()
    val bpd_mispredict = Bool()
+   val ras_made_pred  = Bool()
+   val ras_mispredict = Bool()
+   val ras_give_up    = Bool()
+   val ras_success    = Bool()
 }
 
 /**
@@ -423,10 +427,17 @@ class ALUUnit(is_branch_unit: Boolean = false, num_stages: Int = 1, data_width: 
 
       val is_br          = io.req.valid && !killed && uop.is_br_or_jmp && !uop.is_jump
       val is_br_or_jalr  = io.req.valid && !killed && uop.is_br_or_jmp && !uop.is_jal
+      val is_ret         = io.req.valid && !killed && uop.is_ret
 
       // did the BTB predict a br or jmp incorrectly?
       // (do we need to reset its history and teach it a new target?)
       val btb_mispredict = WireInit(false.B)
+
+      val ras_mispredict = WireInit(false.B)
+
+      val ras_give_up = WireInit(false.B)
+
+      val ras_success = WireInit(false.B)
 
       // did the bpd predict incorrectly (aka, should we correct its prediction?)
       val bpd_mispredict = WireInit(false.B)
@@ -457,6 +468,22 @@ class ALUUnit(is_branch_unit: Boolean = false, num_stages: Int = 1, data_width: 
                               !uop.br_prediction.btb_taken ||
                               io.status.debug // fun HACK to perform fence.i on JALRs in debug mode
             bpd_mispredict := false.B
+
+            when (is_ret)
+            {
+               when (uop.br_prediction.ras_pred) {
+                  when (wrong_taken_target) {
+                     ras_mispredict := true.B
+                     // TODO print prediction and correct target here
+                     dprintf(D_RAS, "Wrong addr for pc 0x%x: next inst valid: %d, predicted next pc: 0x%x, correct bj_addr: 0x%x\n",
+                        io.get_ftq_pc.fetch_pc, io.get_ftq_pc.next_val, io.get_ftq_pc.next_pc, bj_addr)
+                  }.otherwise {
+                     ras_success := true.B
+                  }
+               }.otherwise {
+                  ras_give_up := true.B
+               }
+            }
          }
          when (pc_sel === PC_PLUS4)
          {
@@ -551,10 +578,17 @@ class ALUUnit(is_branch_unit: Boolean = false, num_stages: Int = 1, data_width: 
                                Mux(pc_sel === PC_JALR, CfiType.jalr,
                                Mux(uop.is_br_or_jmp, CfiType.branch, CfiType.none)))
       brinfo.taken          := is_taken
+
       brinfo.btb_mispredict := btb_mispredict
       brinfo.bpd_mispredict := bpd_mispredict
+      brinfo.ras_mispredict := ras_mispredict
+      brinfo.ras_success    := ras_success
+
+      brinfo.ras_give_up    := ras_give_up
+
       brinfo.btb_made_pred  := uop.br_prediction.btb_blame
       brinfo.bpd_made_pred  := uop.br_prediction.bpd_blame
+      brinfo.ras_made_pred  := uop.br_prediction.ras_pred
 
       br_unit.brinfo := brinfo
 

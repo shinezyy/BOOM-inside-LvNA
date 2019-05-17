@@ -208,8 +208,70 @@ class BoomCore(implicit p: Parameters, edge: freechips.rocketchip.tilelink.TLEdg
    // TODO: Generate this in lsu
    val sxt_ldMiss = Wire(Bool())
 
-   //-------------------------------------------------------------
+   // stats
    // Uarch Hardware Performance Events (HPEs)
+
+   // Branch prediction stats.
+
+   val stat_brjmp_mispredicted = Stats("brjmp_mispredicted", hartId)
+   stat_brjmp_mispredicted.counter := PopCount((Range(0,coreWidth)).map{w =>
+      rob.io.commit.valids(w) && rob.io.commit.uops(w).is_br_or_jmp &&
+        !rob.io.commit.uops(w).is_jal &&
+        rob.io.commit.uops(w).stat_brjmp_mispredicted}) + stat_brjmp_mispredicted.counter
+
+   val stat_btb_made_pred = Stats("btb_made_pred", hartId)
+   stat_btb_made_pred.counter := PopCount((Range(0,coreWidth)).map{w =>
+      rob.io.commit.valids(w) && rob.io.commit.uops(w).is_br_or_jmp && !rob.io.commit.uops(w).is_jal &&
+      rob.io.commit.uops(w).stat_btb_made_pred}) + stat_btb_made_pred.counter
+
+   val stat_btb_mispredicted  = Stats("btb_mispredicted", hartId)
+   stat_btb_mispredicted.counter := PopCount((Range(0,coreWidth)).map{w =>
+      rob.io.commit.valids(w) && rob.io.commit.uops(w).is_br_or_jmp && !rob.io.commit.uops(w).is_jal &&
+      rob.io.commit.uops(w).stat_btb_mispredicted}) + stat_btb_mispredicted.counter
+
+   val stat_ras_made_pred = Stats("ras_made_pred", hartId)
+   stat_ras_made_pred.counter := PopCount((Range(0,coreWidth)).map{w =>
+      rob.io.commit.valids(w) && rob.io.commit.uops(w).is_ret &&
+      rob.io.commit.uops(w).stat_ras_made_pred}) + stat_ras_made_pred.counter
+
+   val stat_ras_mispredicted  = Stats("ras_mispredicted", hartId)
+   stat_ras_mispredicted.counter := PopCount((Range(0,coreWidth)).map{w =>
+      rob.io.commit.valids(w) && rob.io.commit.uops(w).is_ret &&
+      rob.io.commit.uops(w).stat_ras_mispredicted}) + stat_ras_mispredicted.counter
+
+   val stat_ras_give_up  = Stats("ras_give_up", hartId)
+   stat_ras_give_up.counter := PopCount((Range(0,coreWidth)).map{w =>
+      rob.io.commit.valids(w) && rob.io.commit.uops(w).is_ret &&
+        rob.io.commit.uops(w).stat_ras_give_up}) + stat_ras_give_up.counter
+
+   val stat_ras_success  = Stats("ras_success", hartId)
+   stat_ras_success.counter := PopCount((Range(0,coreWidth)).map{w =>
+      rob.io.commit.valids(w) && rob.io.commit.uops(w).is_ret &&
+        rob.io.commit.uops(w).stat_ras_success}) + stat_ras_success.counter
+
+   val stat_bpd_made_pred = Stats("bpd_made_pred", hartId)
+   stat_bpd_made_pred.counter := PopCount((Range(0,coreWidth)).map{w =>
+      rob.io.commit.valids(w) && rob.io.commit.uops(w).is_br_or_jmp && !rob.io.commit.uops(w).is_jal &&
+      rob.io.commit.uops(w).stat_bpd_made_pred}) + stat_bpd_made_pred.counter
+   val stat_bpd_mispredicted = Stats("bpd_mispredicted", hartId)
+   stat_bpd_mispredicted.counter := PopCount((Range(0,coreWidth)).map{w =>
+      rob.io.commit.valids(w) && rob.io.commit.uops(w).is_br_or_jmp && !rob.io.commit.uops(w).is_jal &&
+      rob.io.commit.uops(w).stat_bpd_mispredicted}) + stat_bpd_mispredicted.counter
+
+   // Branch prediction - no prediction made.
+   val stat_bpd_no_pred_made = Stats("bpd_no_pred_made ", hartId)
+   stat_bpd_no_pred_made.counter := PopCount((Range(0,coreWidth)).map{w =>
+      rob.io.commit.valids(w) && rob.io.commit.uops(w).is_br_or_jmp && !rob.io.commit.uops(w).is_jal &&
+      !rob.io.commit.uops(w).stat_btb_made_pred && !rob.io.commit.uops(w).stat_bpd_made_pred}) +
+     stat_bpd_no_pred_made.counter
+
+   // Branch prediction - no predition made & a mispredict occurred.
+   val stat_mis_on_no_pred = Stats("mis_on_no_pred", hartId)
+   stat_mis_on_no_pred.counter := PopCount((Range(0,coreWidth)).map{w =>
+      rob.io.commit.valids(w) && rob.io.commit.uops(w).is_br_or_jmp && !rob.io.commit.uops(w).is_jal &&
+      !rob.io.commit.uops(w).stat_btb_made_pred && !rob.io.commit.uops(w).stat_bpd_made_pred &&
+      rob.io.commit.uops(w).stat_brjmp_mispredicted}) + stat_mis_on_no_pred.counter
+
 
    val perfEvents = new freechips.rocketchip.rocket.EventSets(Seq(
       new freechips.rocketchip.rocket.EventSet((mask, hits) => (mask & hits).orR, Seq(

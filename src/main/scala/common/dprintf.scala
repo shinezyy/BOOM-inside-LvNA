@@ -1,9 +1,8 @@
 
 package boom.common
 
-import chisel3.{core, _}
+import chisel3._
 import chisel3.core._
-import freechips.rocketchip.tile
 
 
 

@@ -169,15 +169,17 @@ class BTBsa(implicit p: Parameters) extends BoomBTB
     val isEmpty = if (rasCheckForEmpty) ras.isEmpty else false.B
 
     when (doPeek) {
+      s1_resp_bits.from_ras := true.B
       when (!isEmpty) {
         s1_resp_bits.target := ras.peek
+        s1_resp_bits.ras_empty := false.B
         dprintf(D_RAS, "[%d] read 0x%x from RAS for req: 0x%x\n",
           GTimer(), ras.peek, io.req.bits.addr)
-        s1_resp_bits.from_ras := true.B
 
       } .otherwise {
         dprintf(D_RAS, "[%d] reject to provide prediction when RAS empty\n", GTimer())
-        s1_valid := false.B
+//        s1_valid := false.B
+        s1_resp_bits.ras_empty := true.B
       }
     }
 
